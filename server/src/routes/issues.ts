@@ -89,6 +89,7 @@ import {
   collectIssueWorkspaceCommandPaths,
 } from "./workspace-command-authz.js";
 import { shouldWakeAssigneeOnCheckout } from "./issues-checkout-wakeup.js";
+import { isAssigneeOwnRun } from "./is-assignee-own-run.js";
 import {
   isInlineAttachmentContentType,
   normalizeIssueAttachmentMaxBytes,
@@ -1137,14 +1138,20 @@ export function issueRoutes(
   }
 
   function queueAnnotationCommentWakeup(input: {
-    issue: { id: string; assigneeAgentId: string | null; status: string };
-    actor: { actorType: "user" | "agent"; actorId: string };
+    issue: {
+      id: string;
+      assigneeAgentId: string | null;
+      checkoutRunId?: string | null;
+      executionRunId?: string | null;
+      status: string;
+    };
+    actor: { actorType: "user" | "agent"; actorId: string; runId?: string | null };
     threadId: string;
     commentId: string;
     documentKey: string;
   }) {
     const assigneeId = input.issue.assigneeAgentId;
-    const selfComment = input.actor.actorType === "agent" && input.actor.actorId === assigneeId;
+    const selfComment = isAssigneeOwnRun({ actor: input.actor, issue: input.issue });
     if (!assigneeId || selfComment || isClosedIssueStatus(input.issue.status)) return;
     void heartbeat.wakeup(assigneeId, {
       source: "automation",
@@ -4716,7 +4723,8 @@ export function issueRoutes(
       if (
         !assigneeChanged &&
         (statusChangedFromBacklog || statusChangedFromBlockedToTodo || statusChangedFromClosedToTodo) &&
-        issue.assigneeAgentId
+        issue.assigneeAgentId &&
+        !isAssigneeOwnRun({ actor, issue })
       ) {
         addWakeup(issue.assigneeAgentId, {
           source: "automation",
@@ -4742,7 +4750,7 @@ export function issueRoutes(
       if (commentBody && comment) {
         const assigneeId = issue.assigneeAgentId;
         const actorIsAgent = actor.actorType === "agent";
-        const selfComment = actorIsAgent && actor.actorId === assigneeId;
+        const selfComment = isAssigneeOwnRun({ actor, issue });
         const skipAssigneeCommentWake = selfComment || isClosed;
 
         if (assigneeId && !assigneeChanged && (reopened || !skipAssigneeCommentWake)) {
@@ -5831,7 +5839,7 @@ export function issueRoutes(
       const wakeups = new Map<string, Parameters<typeof heartbeat.wakeup>[1]>();
       const assigneeId = currentIssue.assigneeAgentId;
       const actorIsAgent = actor.actorType === "agent";
-      const selfComment = actorIsAgent && actor.actorId === assigneeId;
+      const selfComment = isAssigneeOwnRun({ actor, issue: currentIssue });
       const skipWake = selfComment || isClosed;
       if (assigneeId && (reopened || !skipWake)) {
         if (reopened) {
