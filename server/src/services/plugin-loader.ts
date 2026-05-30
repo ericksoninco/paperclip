@@ -29,7 +29,7 @@ import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import type { Db } from "@paperclipai/db";
 import type {
@@ -51,6 +51,7 @@ import type { PluginLifecycleManager } from "./plugin-lifecycle.js";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+let pluginModuleImportCounter = 0;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -77,6 +78,12 @@ export const DEFAULT_LOCAL_PLUGIN_DIR = path.join(
 );
 
 const DEV_TSX_LOADER_PATH = path.resolve(__dirname, "../../../cli/node_modules/tsx/dist/loader.mjs");
+
+function createFreshFileImportSpecifier(filePath: string): string {
+  const url = pathToFileURL(filePath);
+  url.searchParams.set("paperclipCacheBust", `${Date.now()}-${++pluginModuleImportCounter}`);
+  return url.href;
+}
 
 // ---------------------------------------------------------------------------
 // Discovery result types
@@ -926,8 +933,10 @@ export function pluginLoader(
     let raw: unknown;
 
     try {
-      // Dynamic import works for both .js (ESM) and .cjs (CJS) manifests
-      const mod = await import(manifestPath) as Record<string, unknown>;
+      // Dynamic import works for both .js (ESM) and .cjs (CJS) manifests.
+      // Use a fresh file URL so local-path reinstall/upgrade reads the current
+      // manifest from disk instead of Node's process-lifetime ESM cache.
+      const mod = await import(createFreshFileImportSpecifier(manifestPath)) as Record<string, unknown>;
       // The manifest may be the default export or the module itself
       raw = mod["default"] ?? mod;
     } catch (err) {
