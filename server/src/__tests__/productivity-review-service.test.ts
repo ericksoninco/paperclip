@@ -18,6 +18,7 @@ import {
 import { MAX_ISSUE_REQUEST_DEPTH } from "@paperclipai/shared";
 import {
   DEFAULT_PRODUCTIVITY_REVIEW_EPIC_CHILD_THRESHOLD,
+  DEFAULT_PRODUCTIVITY_REVIEW_HIGH_CHURN_HOURLY,
   DEFAULT_PRODUCTIVITY_REVIEW_MAX_REFRESH_COMMENTS,
   DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS,
   DEFAULT_PRODUCTIVITY_REVIEW_REFRESH_INTERVAL_MS,
@@ -25,6 +26,9 @@ import {
   PRODUCTIVITY_REVIEW_ORIGIN_KIND,
   productivityReviewService,
 } from "../services/productivity-review.ts";
+import { RECOVERY_RUN_WAKE_REASONS } from "../services/recovery/origins.ts";
+
+const RECOVERY_WAKE_REASON = RECOVERY_RUN_WAKE_REASONS[0];
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -123,23 +127,31 @@ describeEmbeddedPostgres("productivity review service", () => {
     now: Date;
     withRunComments?: boolean;
     spacingMs?: number;
+    startOffsetMs?: number;
+    wakeReason?: string;
   }) {
     const spacingMs = input.spacingMs ?? 60_000;
+    const startOffsetMs = input.startOffsetMs ?? 0;
     const runs: Array<typeof heartbeatRuns.$inferInsert> = [];
     for (let index = 0; index < input.count; index += 1) {
       const runId = randomUUID();
-      const createdAt = new Date(input.now.getTime() - index * spacingMs);
+      const createdAt = new Date(input.now.getTime() - startOffsetMs - index * spacingMs);
+      const contextSnapshot: Record<string, unknown> = {
+        issueId: input.issueId,
+        taskId: input.issueId,
+      };
+      if (input.wakeReason) contextSnapshot.wakeReason = input.wakeReason;
       runs.push({
         id: runId,
         companyId: input.companyId,
         agentId: input.agentId,
         status: "succeeded",
-        invocationSource: "assignment",
+        invocationSource: input.wakeReason ? "automation" : "assignment",
         triggerDetail: "system",
         startedAt: createdAt,
         finishedAt: new Date(createdAt.getTime() + 30_000),
-        contextSnapshot: { issueId: input.issueId, taskId: input.issueId },
-        livenessState: "advanced",
+        contextSnapshot,
+        livenessState: input.wakeReason ? "unknown" : "advanced",
         nextAction: "Continue processing the next batch.",
         createdAt,
         updatedAt: createdAt,
@@ -742,5 +754,109 @@ describeEmbeddedPostgres("productivity review service", () => {
     expect(result.created).toBe(1);
     const [review] = await listProductivityReviews(seeded.companyId);
     expect(review?.description).toContain("Primary trigger: `long_active_duration`");
+  });
+
+  // EDD-322 regression coverage: recovery/liveness runs must not feed productivity signals.
+
+  it("does not fire no_comment_streak for a recovery-only run pile-up", async () => {
+    const now = new Date("2026-04-28T12:00:00.000Z");
+    const seeded = await seedAssignedIssue();
+    await insertRuns({
+      companyId: seeded.companyId,
+      agentId: seeded.coderId,
+      issueId: seeded.issueId,
+      count: DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS * 3,
+      now,
+      wakeReason: RECOVERY_WAKE_REASON,
+    });
+
+    const result = await productivityReviewService(db).reconcileProductivityReviews({
+      now,
+      companyId: seeded.companyId,
+    });
+
+    expect(result.created).toBe(0);
+    expect(await listProductivityReviews(seeded.companyId)).toHaveLength(0);
+  });
+
+  it("still fires no_comment_streak for a genuine assignment-run streak (regression guard)", async () => {
+    const now = new Date("2026-04-28T12:00:00.000Z");
+    const seeded = await seedAssignedIssue();
+    await insertRuns({
+      companyId: seeded.companyId,
+      agentId: seeded.coderId,
+      issueId: seeded.issueId,
+      count: DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS,
+      now,
+    });
+
+    const result = await productivityReviewService(db).reconcileProductivityReviews({
+      now,
+      companyId: seeded.companyId,
+    });
+
+    expect(result.created).toBe(1);
+    const [review] = await listProductivityReviews(seeded.companyId);
+    expect(review?.description).toContain("Primary trigger: `no_comment_streak`");
+    expect(review?.description).toContain(
+      `No-comment completed-run streak: ${DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS}`,
+    );
+  });
+
+  it("counts only substantive runs when recovery runs are interleaved with real runs", async () => {
+    const now = new Date("2026-04-28T12:00:00.000Z");
+    const seeded = await seedAssignedIssue();
+    // Newest runs are recovery noise; the genuine streak sits underneath it.
+    await insertRuns({
+      companyId: seeded.companyId,
+      agentId: seeded.coderId,
+      issueId: seeded.issueId,
+      count: 20,
+      now,
+      wakeReason: RECOVERY_WAKE_REASON,
+    });
+    await insertRuns({
+      companyId: seeded.companyId,
+      agentId: seeded.coderId,
+      issueId: seeded.issueId,
+      count: DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS,
+      now,
+      startOffsetMs: 60 * 60_000,
+    });
+
+    const result = await productivityReviewService(db).reconcileProductivityReviews({
+      now,
+      companyId: seeded.companyId,
+    });
+
+    expect(result.created).toBe(1);
+    const [review] = await listProductivityReviews(seeded.companyId);
+    expect(review?.description).toContain("Primary trigger: `no_comment_streak`");
+    expect(review?.description).toContain(
+      `No-comment completed-run streak: ${DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS}`,
+    );
+  });
+
+  it("does not fire high_churn for a blocked issue with a dense recovery-run pile-up", async () => {
+    const now = new Date("2026-04-28T12:00:00.000Z");
+    const seeded = await seedAssignedIssue();
+    // A burst of recovery runs within the last hour would trip high_churn if counted.
+    await insertRuns({
+      companyId: seeded.companyId,
+      agentId: seeded.coderId,
+      issueId: seeded.issueId,
+      count: DEFAULT_PRODUCTIVITY_REVIEW_HIGH_CHURN_HOURLY * 4,
+      now,
+      spacingMs: 60_000,
+      wakeReason: RECOVERY_WAKE_REASON,
+    });
+
+    const result = await productivityReviewService(db).reconcileProductivityReviews({
+      now,
+      companyId: seeded.companyId,
+    });
+
+    expect(result.created).toBe(0);
+    expect(await listProductivityReviews(seeded.companyId)).toHaveLength(0);
   });
 });

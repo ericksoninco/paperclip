@@ -22,7 +22,7 @@ import {
   recoveryAssigneeAdapterOverrides,
   withRecoveryModelProfileHint,
 } from "./recovery/model-profile-hint.js";
-import { RECOVERY_ORIGIN_KINDS } from "./recovery/origins.js";
+import { RECOVERY_ORIGIN_KINDS, RECOVERY_RUN_WAKE_REASONS } from "./recovery/origins.js";
 
 export const PRODUCTIVITY_REVIEW_ORIGIN_KIND = RECOVERY_ORIGIN_KINDS.issueProductivityReview;
 export const DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS = 10;
@@ -111,6 +111,25 @@ function issueRunScopeSql(issueId: string) {
     ${heartbeatRuns.contextSnapshot}->>'issueId' = ${issueId}
     or ${heartbeatRuns.contextSnapshot}->>'taskId' = ${issueId}
     or ${heartbeatRuns.contextSnapshot}->>'taskKey' = ${issueId}
+  )`;
+}
+
+/**
+ * Excludes system-generated recovery / liveness / continuation runs (EDD-322).
+ * These runs are 0-cost and never comment, so counting them inflates
+ * `no_comment_streak` and high-churn evidence for issues that are merely parked
+ * (e.g. manually `blocked` while liveness/recovery keeps generating runs). A run
+ * is treated as substantive unless its `contextSnapshot.wakeReason` is one of the
+ * known recovery wake reasons.
+ */
+function substantiveRunSql() {
+  const reasons = sql.join(
+    RECOVERY_RUN_WAKE_REASONS.map((reason) => sql`${reason}`),
+    sql`, `,
+  );
+  return sql`(
+    ${heartbeatRuns.contextSnapshot}->>'wakeReason' is null
+    or ${heartbeatRuns.contextSnapshot}->>'wakeReason' not in (${reasons})
   )`;
 }
 
@@ -369,6 +388,7 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
           eq(heartbeatRuns.companyId, companyId),
           eq(heartbeatRuns.agentId, agentId),
           issueRunScopeSql(issueId),
+          substantiveRunSql(),
           sql`coalesce(${heartbeatRuns.startedAt}, ${heartbeatRuns.createdAt}) >= ${since.toISOString()}::timestamptz`,
         ),
       )
@@ -485,6 +505,7 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
           eq(heartbeatRuns.companyId, sourceIssue.companyId),
           eq(heartbeatRuns.agentId, sourceAgent.id),
           issueRunScopeSql(sourceIssue.id),
+          substantiveRunSql(),
         ),
       )
       .orderBy(desc(heartbeatRuns.createdAt), desc(heartbeatRuns.id))

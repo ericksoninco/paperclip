@@ -9,6 +9,29 @@ export const RECOVERY_REASON_KINDS = {
   runLivenessContinuation: "run_liveness_continuation",
 } as const;
 
+/**
+ * Wake reasons (stored on a heartbeat run's `contextSnapshot.wakeReason`) that
+ * identify a run as system-generated recovery / liveness / continuation work
+ * rather than a substantive, comment-able assignment run. These runs are 0-cost
+ * and never post issue comments, so they must be excluded from productivity
+ * signals such as `no_comment_streak` and high-churn counts (EDD-322).
+ */
+export const RECOVERY_RUN_WAKE_REASONS = [
+  RECOVERY_REASON_KINDS.runLivenessContinuation,
+  "issue_monitor_recovery",
+  "issue_monitor_recovery_issue",
+  "issue_recovery_action_restored",
+  "process_lost_retry",
+  "missing_issue_comment",
+  "max_turns_continuation_retry",
+] as const;
+
+export type RecoveryRunWakeReason = typeof RECOVERY_RUN_WAKE_REASONS[number];
+
+export function isRecoveryRunWakeReason(wakeReason: string | null | undefined): boolean {
+  return wakeReason != null && (RECOVERY_RUN_WAKE_REASONS as readonly string[]).includes(wakeReason);
+}
+
 export const RECOVERY_KEY_PREFIXES = {
   issueGraphLivenessIncident: "harness_liveness",
   issueGraphLivenessLeaf: "harness_liveness_leaf",
