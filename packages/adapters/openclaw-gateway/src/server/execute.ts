@@ -87,6 +87,46 @@ type GatewayClientRequestOptions = {
 };
 
 export const PROTOCOL_VERSION = 4;
+// Mirrors OpenClaw v4 AgentParamsSchema in openclaw/src/gateway/protocol/schema/agent.ts.
+export const OPENCLAW_V4_AGENT_PARAM_KEYS = [
+  "message",
+  "agentId",
+  "provider",
+  "model",
+  "to",
+  "replyTo",
+  "sessionId",
+  "sessionKey",
+  "thinking",
+  "deliver",
+  "attachments",
+  "channel",
+  "replyChannel",
+  "accountId",
+  "replyAccountId",
+  "threadId",
+  "groupId",
+  "groupChannel",
+  "groupSpace",
+  "timeout",
+  "bestEffortDeliver",
+  "lane",
+  "cleanupBundleMcpOnRunEnd",
+  "modelRun",
+  "promptMode",
+  "extraSystemPrompt",
+  "bootstrapContextMode",
+  "bootstrapContextRunKind",
+  "acpTurnSource",
+  "internalRuntimeHandoffId",
+  "internalEvents",
+  "inputProvenance",
+  "voiceWakeTrigger",
+  "idempotencyKey",
+  "label",
+] as const;
+
+const OPENCLAW_V4_AGENT_PARAM_KEY_SET = new Set<string>(OPENCLAW_V4_AGENT_PARAM_KEYS);
 const DEFAULT_SCOPES = ["operator.admin"];
 const DEFAULT_CLIENT_ID = "gateway-client";
 const DEFAULT_CLIENT_MODE = "backend";
@@ -132,6 +172,36 @@ function normalizeSessionKeyStrategy(value: unknown): SessionKeyStrategy {
   const normalized = asString(value, "issue").trim().toLowerCase();
   if (normalized === "fixed" || normalized === "run") return normalized;
   return "issue";
+}
+
+export function buildOpenClawAgentParams(input: {
+  payloadTemplate: Record<string, unknown>;
+  message: string;
+  sessionKey: string;
+  idempotencyKey: string;
+  configuredAgentId: string | null;
+  waitTimeoutMs: number;
+}): Record<string, unknown> {
+  const agentParams: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input.payloadTemplate)) {
+    if (OPENCLAW_V4_AGENT_PARAM_KEY_SET.has(key)) {
+      agentParams[key] = value;
+    }
+  }
+
+  agentParams.message = input.message;
+  agentParams.sessionKey = input.sessionKey;
+  agentParams.idempotencyKey = input.idempotencyKey;
+
+  if (input.configuredAgentId && !nonEmpty(agentParams.agentId)) {
+    agentParams.agentId = input.configuredAgentId;
+  }
+
+  if (typeof agentParams.timeout !== "number") {
+    agentParams.timeout = input.waitTimeoutMs;
+  }
+
+  return agentParams;
 }
 
 function prefixSessionKeyForAgent(sessionKey: string, agentId: string | null): string {
@@ -464,62 +534,6 @@ function joinWakePayloadSections(structuredWakePrompt: string, structuredWakeJso
     "```",
   ].filter((entry) => entry.trim().length > 0);
   return sections.join("\n");
-}
-
-function buildStandardPaperclipPayload(
-  ctx: AdapterExecutionContext,
-  wakePayload: WakePayload,
-  paperclipEnv: Record<string, string>,
-  payloadTemplate: Record<string, unknown>,
-): Record<string, unknown> {
-  const templatePaperclip = parseObject(payloadTemplate.paperclip);
-  const workspace = asRecord(ctx.context.paperclipWorkspace);
-  const workspaces = Array.isArray(ctx.context.paperclipWorkspaces)
-    ? ctx.context.paperclipWorkspaces.filter((entry): entry is Record<string, unknown> => Boolean(asRecord(entry)))
-    : [];
-  const configuredWorkspaceRuntime = parseObject(ctx.config.workspaceRuntime);
-  const runtimeServiceIntents = Array.isArray(ctx.context.paperclipRuntimeServiceIntents)
-    ? ctx.context.paperclipRuntimeServiceIntents.filter(
-        (entry): entry is Record<string, unknown> => Boolean(asRecord(entry)),
-      )
-    : [];
-
-  const standardPaperclip: Record<string, unknown> = {
-    runId: ctx.runId,
-    companyId: ctx.agent.companyId,
-    agentId: ctx.agent.id,
-    agentName: ctx.agent.name,
-    taskId: wakePayload.taskId,
-    issueId: wakePayload.issueId,
-    issueIds: wakePayload.issueIds,
-    wakeReason: wakePayload.wakeReason,
-    wakeCommentId: wakePayload.wakeCommentId,
-    approvalId: wakePayload.approvalId,
-    approvalStatus: wakePayload.approvalStatus,
-    apiUrl: paperclipEnv.PAPERCLIP_API_URL ?? null,
-  };
-  const structuredWake = parseObject(ctx.context.paperclipWake);
-  if (Object.keys(structuredWake).length > 0) {
-    standardPaperclip.wake = structuredWake;
-  }
-
-  if (workspace) {
-    standardPaperclip.workspace = workspace;
-  }
-  if (workspaces.length > 0) {
-    standardPaperclip.workspaces = workspaces;
-  }
-  if (runtimeServiceIntents.length > 0 || Object.keys(configuredWorkspaceRuntime).length > 0) {
-    standardPaperclip.workspaceRuntime = {
-      ...configuredWorkspaceRuntime,
-      ...(runtimeServiceIntents.length > 0 ? { services: runtimeServiceIntents } : {}),
-    };
-  }
-
-  return {
-    ...templatePaperclip,
-    ...standardPaperclip,
-  };
 }
 
 function normalizeUrl(input: string): URL | null {
@@ -1130,25 +1144,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const templateMessage = nonEmpty(payloadTemplate.message) ?? nonEmpty(payloadTemplate.text);
   const message = templateMessage ? appendWakeText(templateMessage, wakeText) : wakeText;
-  const paperclipPayload = buildStandardPaperclipPayload(ctx, wakePayload, paperclipEnv, payloadTemplate);
 
-  const agentParams: Record<string, unknown> = {
-    ...payloadTemplate,
+  const configuredAgentId = nonEmpty(ctx.config.agentId);
+  const agentParams = buildOpenClawAgentParams({
+    payloadTemplate,
     message,
     sessionKey,
     idempotencyKey: ctx.runId,
-  };
-  delete agentParams.text;
-  agentParams.paperclip = paperclipPayload;
-
-  const configuredAgentId = nonEmpty(ctx.config.agentId);
-  if (configuredAgentId && !nonEmpty(agentParams.agentId)) {
-    agentParams.agentId = configuredAgentId;
-  }
-
-  if (typeof agentParams.timeout !== "number") {
-    agentParams.timeout = waitTimeoutMs;
-  }
+    configuredAgentId,
+    waitTimeoutMs,
+  });
 
   if (ctx.onMeta) {
     await ctx.onMeta({
