@@ -1,17 +1,33 @@
 #!/usr/bin/env -S node --import tsx
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
+import { createCapturedOutputBuffer, parseJsonResponseWithLimit } from "./dev-runner-output.ts";
 import { shouldTrackDevServerPath } from "./dev-runner-paths.mjs";
 import { createDevServiceIdentity, repoRoot } from "./dev-service-profile.ts";
+import { bootstrapDevRunnerWorktreeEnv } from "../server/src/dev-runner-worktree.ts";
 import {
   findAdoptableLocalService,
   removeLocalServiceRegistryRecord,
   touchLocalServiceRegistryRecord,
   writeLocalServiceRegistryRecord,
 } from "../server/src/services/local-service-supervisor.ts";
+
+// Keep these values local so the dev runner can boot from the server package's
+// tsx context without requiring workspace package resolution first.
+const BIND_MODES = ["loopback", "lan", "tailnet", "custom"] as const;
+type BindMode = (typeof BIND_MODES)[number];
+
+const worktreeEnvBootstrap = bootstrapDevRunnerWorktreeEnv(repoRoot, process.env);
+if (worktreeEnvBootstrap.missingEnv) {
+  console.error(
+    `[paperclip] linked git worktree at ${repoRoot} is missing ${path.relative(repoRoot, worktreeEnvBootstrap.envPath)}. Run \`paperclipai worktree init\` in this worktree before \`pnpm dev\`.`,
+  );
+  process.exit(1);
+}
 
 const mode = process.argv[2] === "watch" ? "watch" : "dev";
 const cliArgs = process.argv.slice(3);
@@ -20,6 +36,9 @@ const autoRestartPollIntervalMs = 2500;
 const gracefulShutdownTimeoutMs = 10_000;
 const changedPathSampleLimit = 5;
 const devServerStatusFilePath = path.join(repoRoot, ".paperclip", "dev-server-status.json");
+const devServerRestartRequestFilePath = path.join(repoRoot, ".paperclip", "dev-server-restart-request.json");
+const devServerStatusToken = mode === "dev" ? randomUUID() : null;
+const devServerStatusTokenHeader = "x-paperclip-dev-server-status-token";
 
 const watchedDirectories = [
   "cli",
@@ -28,6 +47,7 @@ const watchedDirectories = [
   "packages/adapter-utils",
   "packages/adapters",
   "packages/db",
+  "packages/skills-catalog",
   "packages/plugins/sdk",
   "packages/shared",
 ].map((relativePath) => path.join(repoRoot, relativePath));
@@ -52,6 +72,7 @@ const ignoredDirectoryNames = new Set([
 ]);
 
 const ignoredRelativePaths = new Set([
+  ".paperclip/dev-server-restart-request.json",
   ".paperclip/dev-server-status.json",
 ]);
 
@@ -61,11 +82,34 @@ const tailscaleAuthFlagNames = new Set([
 ]);
 
 let tailscaleAuth = false;
+let bindMode: BindMode | null = null;
+let bindHost: string | null = null;
 const forwardedArgs: string[] = [];
 
-for (const arg of cliArgs) {
+for (let index = 0; index < cliArgs.length; index += 1) {
+  const arg = cliArgs[index];
   if (tailscaleAuthFlagNames.has(arg)) {
     tailscaleAuth = true;
+    continue;
+  }
+  if (arg === "--bind") {
+    const value = cliArgs[index + 1];
+    if (!value || value.startsWith("--") || !BIND_MODES.includes(value as BindMode)) {
+      console.error(`[paperclip] invalid --bind value. Use one of: ${BIND_MODES.join(", ")}`);
+      process.exit(1);
+    }
+    bindMode = value as BindMode;
+    index += 1;
+    continue;
+  }
+  if (arg === "--bind-host") {
+    const value = cliArgs[index + 1];
+    if (!value || value.startsWith("--")) {
+      console.error("[paperclip] --bind-host requires a value");
+      process.exit(1);
+    }
+    bindHost = value;
+    index += 1;
     continue;
   }
   forwardedArgs.push(arg);
@@ -77,6 +121,16 @@ if (process.env.npm_config_tailscale_auth === "true") {
 if (process.env.npm_config_authenticated_private === "true") {
   tailscaleAuth = true;
 }
+if (!bindMode && process.env.npm_config_bind && BIND_MODES.includes(process.env.npm_config_bind as BindMode)) {
+  bindMode = process.env.npm_config_bind as BindMode;
+}
+if (!bindHost && process.env.npm_config_bind_host) {
+  bindHost = process.env.npm_config_bind_host;
+}
+if (bindMode === "custom" && !bindHost) {
+  console.error("[paperclip] --bind custom requires --bind-host <host>");
+  process.exit(1);
+}
 
 const env: NodeJS.ProcessEnv = {
   ...process.env,
@@ -85,21 +139,46 @@ const env: NodeJS.ProcessEnv = {
 
 if (mode === "dev") {
   env.PAPERCLIP_DEV_SERVER_STATUS_FILE = devServerStatusFilePath;
+  env.PAPERCLIP_DEV_SERVER_STATUS_TOKEN = devServerStatusToken ?? "";
   env.PAPERCLIP_MIGRATION_AUTO_APPLY ??= "true";
 }
 
 if (mode === "watch") {
+  delete env.PAPERCLIP_DEV_SERVER_STATUS_TOKEN;
   env.PAPERCLIP_MIGRATION_PROMPT ??= "never";
   env.PAPERCLIP_MIGRATION_AUTO_APPLY ??= "true";
 }
 
-if (tailscaleAuth) {
-  env.PAPERCLIP_DEPLOYMENT_MODE = "authenticated";
-  env.PAPERCLIP_DEPLOYMENT_EXPOSURE = "private";
-  env.PAPERCLIP_AUTH_BASE_URL_MODE = "auto";
-  env.HOST = "0.0.0.0";
-  console.log("[paperclip] dev mode: authenticated/private (tailscale-friendly) on 0.0.0.0");
+if (tailscaleAuth || bindMode) {
+  const effectiveBind = bindMode ?? "lan";
+  if (tailscaleAuth) {
+    console.log("[paperclip] note: --tailscale-auth/--authenticated-private are legacy aliases for --bind lan");
+  }
+  env.PAPERCLIP_BIND = effectiveBind;
+  if (bindHost) {
+    env.PAPERCLIP_BIND_HOST = bindHost;
+  } else {
+    delete env.PAPERCLIP_BIND_HOST;
+  }
+  if (effectiveBind === "loopback" && !tailscaleAuth) {
+    delete env.PAPERCLIP_DEPLOYMENT_MODE;
+    delete env.PAPERCLIP_DEPLOYMENT_EXPOSURE;
+    delete env.PAPERCLIP_AUTH_BASE_URL_MODE;
+    console.log("[paperclip] dev mode: local_trusted (bind=loopback)");
+  } else {
+    env.PAPERCLIP_DEPLOYMENT_MODE = "authenticated";
+    env.PAPERCLIP_DEPLOYMENT_EXPOSURE = "private";
+    env.PAPERCLIP_AUTH_BASE_URL_MODE = "auto";
+    console.log(
+      `[paperclip] dev mode: authenticated/private (bind=${effectiveBind}${bindHost ? `:${bindHost}` : ""})`,
+    );
+  }
 } else {
+  delete env.PAPERCLIP_BIND;
+  delete env.PAPERCLIP_BIND_HOST;
+  delete env.PAPERCLIP_DEPLOYMENT_MODE;
+  delete env.PAPERCLIP_DEPLOYMENT_EXPOSURE;
+  delete env.PAPERCLIP_AUTH_BASE_URL_MODE;
   console.log("[paperclip] dev mode: local_trusted (default)");
 }
 
@@ -107,7 +186,7 @@ const serverPort = Number.parseInt(env.PORT ?? process.env.PORT ?? "3100", 10) |
 const devService = createDevServiceIdentity({
   mode,
   forwardedArgs,
-  tailscaleAuth,
+  networkProfile: tailscaleAuth ? `legacy:${bindMode ?? "lan"}` : (bindMode ?? "default"),
   port: serverPort,
 });
 
@@ -272,6 +351,13 @@ function writeDevServerStatus() {
 function clearDevServerStatus() {
   if (mode !== "dev") return;
   rmSync(devServerStatusFilePath, { force: true });
+  rmSync(devServerRestartRequestFilePath, { force: true });
+}
+
+function consumeDevServerRestartRequest() {
+  if (mode !== "dev" || !existsSync(devServerRestartRequestFilePath)) return false;
+  rmSync(devServerRestartRequestFilePath, { force: true });
+  return true;
 }
 
 async function updateDevServiceRecord(extra?: Record<string, unknown>) {
@@ -315,27 +401,29 @@ async function runPnpm(args: string[], options: {
       shell: process.platform === "win32",
     });
 
-    let stdoutBuffer = "";
-    let stderrBuffer = "";
+    const stdoutBuffer = createCapturedOutputBuffer();
+    const stderrBuffer = createCapturedOutputBuffer();
 
     if (spawned.stdout) {
       spawned.stdout.on("data", (chunk) => {
-        stdoutBuffer += String(chunk);
+        stdoutBuffer.append(chunk);
       });
     }
     if (spawned.stderr) {
       spawned.stderr.on("data", (chunk) => {
-        stderrBuffer += String(chunk);
+        stderrBuffer.append(chunk);
       });
     }
 
     spawned.on("error", reject);
     spawned.on("exit", (code, signal) => {
+      const stdout = stdoutBuffer.finish();
+      const stderr = stderrBuffer.finish();
       resolve({
         code: code ?? 0,
         signal,
-        stdout: stdoutBuffer,
-        stderr: stderrBuffer,
+        stdout: stdout.text,
+        stderr: stderr.text,
       });
     });
   });
@@ -480,11 +568,13 @@ async function scanForBackendChanges() {
 }
 
 async function getDevHealthPayload() {
-  const response = await fetch(`http://127.0.0.1:${serverPort}/api/health`);
+  const response = await fetch(`http://127.0.0.1:${serverPort}/api/health`, {
+    headers: devServerStatusToken ? { [devServerStatusTokenHeader]: devServerStatusToken } : undefined,
+  });
   if (!response.ok) {
     throw new Error(`Health request failed (${response.status})`);
   }
-  return await response.json();
+  return await parseJsonResponseWithLimit(response);
 }
 
 async function waitForChildExit() {
@@ -553,7 +643,8 @@ async function startServerChild() {
 
 async function maybeAutoRestartChild() {
   if (mode !== "dev" || restartInFlight || !child) return;
-  if (dirtyPaths.size === 0 && pendingMigrations.length === 0) return;
+  const manualRestartRequested = consumeDevServerRestartRequest();
+  if (!manualRestartRequested && dirtyPaths.size === 0 && pendingMigrations.length === 0) return;
 
   restartInFlight = true;
   let health: { devServer?: { enabled?: boolean; autoRestartEnabled?: boolean; activeRunCount?: number } } | null = null;
@@ -565,11 +656,15 @@ async function maybeAutoRestartChild() {
   }
 
   const devServer = health?.devServer;
-  if (!devServer?.enabled || devServer.autoRestartEnabled !== true) {
+  if (!devServer?.enabled) {
     restartInFlight = false;
     return;
   }
-  if ((devServer.activeRunCount ?? 0) > 0) {
+  if (!manualRestartRequested && devServer.autoRestartEnabled !== true) {
+    restartInFlight = false;
+    return;
+  }
+  if (!manualRestartRequested && (devServer.activeRunCount ?? 0) > 0) {
     restartInFlight = false;
     return;
   }
