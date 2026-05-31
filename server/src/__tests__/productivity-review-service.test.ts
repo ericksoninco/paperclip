@@ -8,6 +8,7 @@ import {
   createDb,
   heartbeatRuns,
   issueComments,
+  issueRelations,
   issues,
 } from "@paperclipai/db";
 import {
@@ -16,6 +17,7 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { MAX_ISSUE_REQUEST_DEPTH } from "@paperclipai/shared";
 import {
+  DEFAULT_PRODUCTIVITY_REVIEW_EPIC_CHILD_THRESHOLD,
   DEFAULT_PRODUCTIVITY_REVIEW_MAX_REFRESH_COMMENTS,
   DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS,
   DEFAULT_PRODUCTIVITY_REVIEW_REFRESH_INTERVAL_MS,
@@ -120,11 +122,13 @@ describeEmbeddedPostgres("productivity review service", () => {
     count: number;
     now: Date;
     withRunComments?: boolean;
+    spacingMs?: number;
   }) {
+    const spacingMs = input.spacingMs ?? 60_000;
     const runs: Array<typeof heartbeatRuns.$inferInsert> = [];
     for (let index = 0; index < input.count; index += 1) {
       const runId = randomUUID();
-      const createdAt = new Date(input.now.getTime() - index * 60_000);
+      const createdAt = new Date(input.now.getTime() - index * spacingMs);
       runs.push({
         id: runId,
         companyId: input.companyId,
@@ -560,7 +564,183 @@ describeEmbeddedPostgres("productivity review service", () => {
     });
 
     expect(result.failed).toBe(0);
+    const [requestDepthReview] = await listProductivityReviews(seeded.companyId);
+    expect(requestDepthReview?.requestDepth).toBe(MAX_ISSUE_REQUEST_DEPTH);
+  });
+
+  async function insertActiveChildren(input: {
+    companyId: string;
+    parentId: string;
+    assigneeAgentId: string;
+    issuePrefix: string;
+    count: number;
+    startNumber?: number;
+  }) {
+    const startNumber = input.startNumber ?? 100;
+    const rows = Array.from({ length: input.count }, (_unused, index) => {
+      const issueNumber = startNumber + index;
+      return {
+        id: randomUUID(),
+        companyId: input.companyId,
+        title: `Child ${index}`,
+        status: "in_progress" as const,
+        priority: "medium" as const,
+        assigneeAgentId: input.assigneeAgentId,
+        parentId: input.parentId,
+        originKind: "manual",
+        issueNumber,
+        identifier: `${input.issuePrefix}-${issueNumber}`,
+      };
+    });
+    await db.insert(issues).values(rows);
+    return rows;
+  }
+
+  async function insertBlocker(input: {
+    companyId: string;
+    blockedIssueId: string;
+    issuePrefix: string;
+    blockerStatus?: "todo" | "in_progress" | "done" | "cancelled";
+    issueNumber?: number;
+  }) {
+    const blockerId = randomUUID();
+    const issueNumber = input.issueNumber ?? 900;
+    await db.insert(issues).values({
+      id: blockerId,
+      companyId: input.companyId,
+      title: "Blocking dependency",
+      status: input.blockerStatus ?? "in_progress",
+      priority: "medium",
+      originKind: "manual",
+      issueNumber,
+      identifier: `${input.issuePrefix}-${issueNumber}`,
+    });
+    await db.insert(issueRelations).values({
+      companyId: input.companyId,
+      issueId: blockerId,
+      relatedIssueId: input.blockedIssueId,
+      type: "blocks",
+    });
+    return blockerId;
+  }
+
+  it("exempts epic/umbrella issues from no_comment_streak", async () => {
+    const now = new Date("2026-04-28T12:00:00.000Z");
+    const seeded = await seedAssignedIssue();
+    await insertActiveChildren({
+      companyId: seeded.companyId,
+      parentId: seeded.issueId,
+      assigneeAgentId: seeded.coderId,
+      issuePrefix: seeded.issuePrefix,
+      count: DEFAULT_PRODUCTIVITY_REVIEW_EPIC_CHILD_THRESHOLD,
+    });
+    await insertRuns({
+      companyId: seeded.companyId,
+      agentId: seeded.coderId,
+      issueId: seeded.issueId,
+      count: DEFAULT_PRODUCTIVITY_REVIEW_NO_COMMENT_STREAK_RUNS,
+      now,
+      spacingMs: 40 * 60_000,
+    });
+
+    const result = await productivityReviewService(db).reconcileProductivityReviews({
+      now,
+      companyId: seeded.companyId,
+    });
+
+    expect(result.created).toBe(0);
+    expect(await listProductivityReviews(seeded.companyId)).toHaveLength(0);
+  });
+
+  it("exempts epic/umbrella issues from long_active_duration", async () => {
+    const now = new Date("2026-04-28T12:00:00.000Z");
+    const seeded = await seedAssignedIssue({
+      status: "in_progress",
+      startedAt: new Date(now.getTime() - 7 * 60 * 60 * 1000),
+    });
+    await insertActiveChildren({
+      companyId: seeded.companyId,
+      parentId: seeded.issueId,
+      assigneeAgentId: seeded.coderId,
+      issuePrefix: seeded.issuePrefix,
+      count: DEFAULT_PRODUCTIVITY_REVIEW_EPIC_CHILD_THRESHOLD,
+    });
+
+    const result = await productivityReviewService(db).reconcileProductivityReviews({
+      now,
+      companyId: seeded.companyId,
+    });
+
+    expect(result.created).toBe(0);
+    expect(await listProductivityReviews(seeded.companyId)).toHaveLength(0);
+  });
+
+  it("still flags non-epic issues just below the epic child threshold", async () => {
+    const now = new Date("2026-04-28T12:00:00.000Z");
+    const seeded = await seedAssignedIssue({
+      status: "in_progress",
+      startedAt: new Date(now.getTime() - 7 * 60 * 60 * 1000),
+    });
+    await insertActiveChildren({
+      companyId: seeded.companyId,
+      parentId: seeded.issueId,
+      assigneeAgentId: seeded.coderId,
+      issuePrefix: seeded.issuePrefix,
+      count: DEFAULT_PRODUCTIVITY_REVIEW_EPIC_CHILD_THRESHOLD - 1,
+    });
+
+    const result = await productivityReviewService(db).reconcileProductivityReviews({
+      now,
+      companyId: seeded.companyId,
+    });
+
+    expect(result.created).toBe(1);
     const [review] = await listProductivityReviews(seeded.companyId);
-    expect(review?.requestDepth).toBe(MAX_ISSUE_REQUEST_DEPTH);
+    expect(review?.description).toContain("Primary trigger: `long_active_duration`");
+  });
+
+  it("suppresses long_active_duration while an unresolved first-class blocker is open", async () => {
+    const now = new Date("2026-04-28T12:00:00.000Z");
+    const seeded = await seedAssignedIssue({
+      status: "in_progress",
+      startedAt: new Date(now.getTime() - 7 * 60 * 60 * 1000),
+    });
+    await insertBlocker({
+      companyId: seeded.companyId,
+      blockedIssueId: seeded.issueId,
+      issuePrefix: seeded.issuePrefix,
+      blockerStatus: "in_progress",
+    });
+
+    const result = await productivityReviewService(db).reconcileProductivityReviews({
+      now,
+      companyId: seeded.companyId,
+    });
+
+    expect(result.created).toBe(0);
+    expect(await listProductivityReviews(seeded.companyId)).toHaveLength(0);
+  });
+
+  it("still flags long_active_duration once the blocker is resolved", async () => {
+    const now = new Date("2026-04-28T12:00:00.000Z");
+    const seeded = await seedAssignedIssue({
+      status: "in_progress",
+      startedAt: new Date(now.getTime() - 7 * 60 * 60 * 1000),
+    });
+    await insertBlocker({
+      companyId: seeded.companyId,
+      blockedIssueId: seeded.issueId,
+      issuePrefix: seeded.issuePrefix,
+      blockerStatus: "done",
+    });
+
+    const result = await productivityReviewService(db).reconcileProductivityReviews({
+      now,
+      companyId: seeded.companyId,
+    });
+
+    expect(result.created).toBe(1);
+    const [review] = await listProductivityReviews(seeded.companyId);
+    expect(review?.description).toContain("Primary trigger: `long_active_duration`");
   });
 });

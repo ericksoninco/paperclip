@@ -466,6 +466,8 @@ In the normal non-terminal case, critical silence can still create issue-backed 
 
 This is distinct from productivity review. Productivity review asks whether an assigned source issue has unusual progression patterns, such as no-comment terminal-run streaks, long active duration, or high churn. Source-resolved watchdog folding asks whether a stale active-run signal outlived a source issue that already reached a valid terminal disposition. One does not substitute for the other.
 
+Productivity review applies two false-positive guards. First, epic/umbrella source issues — those with at least `epicChildThreshold` active (non-cancelled) child issues — are exempt from the `no_comment_streak` and `long_active_duration` triggers, because the work and comment trail live on their children; they remain eligible for `high_churn`. Second, `long_active_duration` is suppressed while the source issue has an open first-class blocker, a pending linked approval, or a pending thread interaction, because the elapsed active time reflects waiting on a named dependency rather than stalled own-work.
+
 Detached process cleanup is operational hygiene, not source issue liveness. Cleanup should be best-effort and auditable. If cleanup fails but the source issue is already terminal with same-run durable evidence, Paperclip should preserve the cleanup failure on the run/watchdog audit trail and route only the cleanup concern to bounded recovery when a real owner/action remains.
 
 ## 12. Auto-Recover vs Explicit Recovery vs Human Escalation

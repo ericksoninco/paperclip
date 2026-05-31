@@ -3,10 +3,14 @@ import type { Db } from "@paperclipai/db";
 import { clampIssueRequestDepth } from "@paperclipai/shared";
 import {
   agents,
+  approvals,
   companies,
   costEvents,
   heartbeatRuns,
+  issueApprovals,
   issueComments,
+  issueRelations,
+  issueThreadInteractions,
   issues,
   projects,
 } from "@paperclipai/db";
@@ -30,6 +34,7 @@ export const DEFAULT_PRODUCTIVITY_REVIEW_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
 export const DEFAULT_PRODUCTIVITY_REVIEW_MAX_REFRESH_COMMENTS = 3;
 export const DEFAULT_PRODUCTIVITY_REVIEW_CREATION_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_PRODUCTIVITY_REVIEW_MAX_CREATIONS_PER_WINDOW = 3;
+export const DEFAULT_PRODUCTIVITY_REVIEW_EPIC_CHILD_THRESHOLD = 5;
 
 const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "cancelled", "timed_out"] as const;
 const ACTIVE_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
@@ -53,6 +58,7 @@ type ProductivityReviewThresholds = {
   maxRefreshComments: number;
   creationWindowMs: number;
   maxCreationsPerWindow: number;
+  epicChildThreshold: number;
 };
 
 type ProductivityReviewEvidence = {
@@ -77,6 +83,10 @@ type ProductivityReviewEvidence = {
   nextAction: string | null;
   thresholds: ProductivityReviewThresholds;
   generatedAt: Date;
+  childCount: number;
+  isEpic: boolean;
+  suppressedTriggers: ProductivityReviewTrigger[];
+  suppressionReasons: string[];
 };
 
 type EnqueueWakeup = (
@@ -175,6 +185,10 @@ function buildThresholds(overrides?: Partial<ProductivityReviewThresholds>): Pro
     maxCreationsPerWindow: readPositiveInteger(
       overrides?.maxCreationsPerWindow ?? DEFAULT_PRODUCTIVITY_REVIEW_MAX_CREATIONS_PER_WINDOW,
       DEFAULT_PRODUCTIVITY_REVIEW_MAX_CREATIONS_PER_WINDOW,
+    ),
+    epicChildThreshold: readPositiveInteger(
+      overrides?.epicChildThreshold ?? DEFAULT_PRODUCTIVITY_REVIEW_EPIC_CHILD_THRESHOLD,
+      DEFAULT_PRODUCTIVITY_REVIEW_EPIC_CHILD_THRESHOLD,
     ),
   };
 }
@@ -380,6 +394,80 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
       .then((rows) => rows[0]?.count ?? 0);
   }
 
+  async function countActiveChildren(companyId: string, issueId: string) {
+    return db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, companyId),
+          eq(issues.parentId, issueId),
+          isNull(issues.hiddenAt),
+          notInArray(issues.status, ["cancelled"]),
+        ),
+      )
+      .then((rows) => rows[0]?.count ?? 0);
+  }
+
+  // Detects whether an in-progress source issue is legitimately waiting on a
+  // named external dependency: an unresolved first-class blocker, an open
+  // (pending) linked approval, or an open (pending) thread interaction. While
+  // such a wait is active, long-active-duration timers should not flag the
+  // issue — the elapsed time reflects waiting, not stalled own-work.
+  async function getOpenDependencyWait(companyId: string, issueId: string): Promise<string[]> {
+    const reasons: string[] = [];
+
+    const blockerRows = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(issueRelations)
+      .innerJoin(issues, eq(issueRelations.issueId, issues.id))
+      .where(
+        and(
+          eq(issueRelations.companyId, companyId),
+          eq(issueRelations.type, "blocks"),
+          eq(issueRelations.relatedIssueId, issueId),
+          notInArray(issues.status, ["done", "cancelled"]),
+        ),
+      )
+      .then((rows) => rows[0]?.count ?? 0);
+    if (blockerRows > 0) {
+      reasons.push(`${blockerRows} unresolved first-class blocker(s)`);
+    }
+
+    const approvalRows = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(issueApprovals)
+      .innerJoin(approvals, eq(issueApprovals.approvalId, approvals.id))
+      .where(
+        and(
+          eq(issueApprovals.companyId, companyId),
+          eq(issueApprovals.issueId, issueId),
+          eq(approvals.status, "pending"),
+        ),
+      )
+      .then((rows) => rows[0]?.count ?? 0);
+    if (approvalRows > 0) {
+      reasons.push(`${approvalRows} pending linked approval(s)`);
+    }
+
+    const interactionRows = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(issueThreadInteractions)
+      .where(
+        and(
+          eq(issueThreadInteractions.companyId, companyId),
+          eq(issueThreadInteractions.issueId, issueId),
+          eq(issueThreadInteractions.status, "pending"),
+        ),
+      )
+      .then((rows) => rows[0]?.count ?? 0);
+    if (interactionRows > 0) {
+      reasons.push(`${interactionRows} pending thread interaction(s)`);
+    }
+
+    return reasons;
+  }
+
   async function collectEvidence(
     sourceIssue: IssueRow,
     sourceAgent: AgentRow,
@@ -475,13 +563,56 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
       ? Math.max(0, now.getTime() - activeStartedAt.getTime())
       : null;
 
-    const noComment = noCommentStreak >= thresholds.noCommentStreakRuns;
-    const longActive = elapsedMs !== null && elapsedMs >= thresholds.longActiveMs;
+    const noCommentRaw = noCommentStreak >= thresholds.noCommentStreakRuns;
+    const longActiveRaw = elapsedMs !== null && elapsedMs >= thresholds.longActiveMs;
     const highChurn =
       runCountLastHour >= thresholds.highChurnHourly ||
       assigneeRunCommentCountLastHour >= thresholds.highChurnHourly ||
       runCountLastSixHours >= thresholds.highChurnSixHours ||
       assigneeRunCommentCountLastSixHours >= thresholds.highChurnSixHours;
+
+    // Suppression layer (EDD-316):
+    // 1. Epic/umbrella issues (active children >= epicChildThreshold) are exempt
+    //    from no_comment_streak and long_active_duration. These genesis/umbrella
+    //    issues legitimately accrue long active windows and run-comment-free runs
+    //    (children carry the work and the comment trail).
+    // 2. long_active_duration is suppressed while a first-class blocker, pending
+    //    approval, or pending interaction wait is open — the elapsed time reflects
+    //    waiting on a named dependency, not stalled own-work.
+    const suppressedTriggers: ProductivityReviewTrigger[] = [];
+    const suppressionReasons: string[] = [];
+
+    const childCount = await countActiveChildren(sourceIssue.companyId, sourceIssue.id);
+    const isEpic = childCount >= thresholds.epicChildThreshold;
+
+    let noComment = noCommentRaw;
+    let longActive = longActiveRaw;
+
+    if (isEpic) {
+      if (noComment) suppressedTriggers.push("no_comment_streak");
+      if (longActive) suppressedTriggers.push("long_active_duration");
+      if (noComment || longActive) {
+        suppressionReasons.push(
+          `epic/umbrella issue with ${childCount} active children (>= ${thresholds.epicChildThreshold}); exempt from no_comment_streak/long_active_duration`,
+        );
+      }
+      noComment = false;
+      longActive = false;
+    }
+
+    if (longActive) {
+      const dependencyWaitReasons = await getOpenDependencyWait(sourceIssue.companyId, sourceIssue.id);
+      if (dependencyWaitReasons.length > 0) {
+        if (!suppressedTriggers.includes("long_active_duration")) {
+          suppressedTriggers.push("long_active_duration");
+        }
+        suppressionReasons.push(
+          `long_active_duration suppressed: open dependency wait (${dependencyWaitReasons.join("; ")})`,
+        );
+        longActive = false;
+      }
+    }
+
     const trigger = choosePrimaryTrigger({ noComment, longActive, highChurn });
     if (!trigger) return null;
 
@@ -519,6 +650,10 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
       nextAction: latestRuns.find((run) => run.nextAction)?.nextAction ?? null,
       thresholds,
       generatedAt: now,
+      childCount,
+      isEpic,
+      suppressedTriggers,
+      suppressionReasons,
     };
   }
 
@@ -591,6 +726,10 @@ export function productivityReviewService(db: Db, deps?: { enqueueWakeup?: Enque
       `- Runs in rolling windows: ${evidence.runCountLastHour}/1h, ${evidence.runCountLastSixHours}/6h`,
       `- Assignee run-linked comments total/window: ${evidence.commentCount} total, ${evidence.commentCountLastHour}/1h, ${evidence.commentCountLastSixHours}/6h`,
       `- Cost events total: ${evidence.costCents} cents`,
+      `- Active child issues: ${evidence.childCount}${evidence.isEpic ? " (epic/umbrella — exempt from no_comment_streak/long_active_duration)" : ""}`,
+      ...(evidence.suppressionReasons.length > 0
+        ? [`- Suppressed triggers: ${evidence.suppressionReasons.join("; ")}`]
+        : []),
       `- Current next action: ${evidence.nextAction ? truncateInline(evidence.nextAction, 500) : "none recorded"}`,
       "",
       "## Thresholds",
