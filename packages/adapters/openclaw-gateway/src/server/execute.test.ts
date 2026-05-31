@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { resolveSessionKey } from "./execute.js";
+import { PROTOCOL_VERSION, resolveSessionKey } from "./execute.js";
+
+describe("PROTOCOL_VERSION", () => {
+  it("matches the minimum protocol required by the current OpenClaw gateway", () => {
+    expect(PROTOCOL_VERSION).toBe(4);
+  });
+});
 
 describe("resolveSessionKey", () => {
   it("prefixes run-scoped session keys with the configured agent", () => {
