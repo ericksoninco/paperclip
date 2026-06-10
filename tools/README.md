@@ -40,5 +40,32 @@ git push origin master:master
 
 As of EDD-363 this was reconciled once (local `master` 759aa13 fast-forwarded
 `origin/master` from 685ee84, 161 commits, 0 lost). It will drift again as
-local `master` advances; re-run the push above, or have an agent/routine do it
-periodically.
+local `master` advances; re-run the push above, or rely on the automated
+routine below.
+
+## Automated fork-master sync routine (EDD-365)
+
+The one-time reconcile above is made **continuous** by the Paperclip routine
+**"Fork master auto-sync (FF-only, never force)"** (owner: Architect, project
+*Operationalization*). It fires hourly (`0 * * * *`, America/Denver), creates an
+execution issue, and runs this exact SOP:
+
+1. `git fetch origin master`
+2. Compare `LOCAL=git rev-parse master`, `ORIGIN=git rev-parse origin/master`,
+   `BASE=git merge-base master origin/master`, then branch on four cases:
+   - **in sync** (`LOCAL == ORIGIN`) → quiet no-op.
+   - **local ahead** (`BASE == ORIGIN`) → `git push origin master:master` (no
+     `--force`/`--force-with-lease`); the true fast-forward case.
+   - **origin ahead** (`BASE == LOCAL`) → nothing to push; no-op (no pull, no
+     force — local catching up is out of scope).
+   - **diverged** (`BASE` is neither) → **never force**; file a `high` alert
+     issue to Architect + CEO with the three SHAs and ahead/behind counts, then
+     stop.
+
+**Hard invariant:** the routine never force-pushes or rewrites `origin/master`
+history. Plain `git push origin master:master` is the only push it issues, and
+git itself refuses any non-fast-forward. Routine health surfaces via its
+`lastRun.status` for the CEO routine-health audit.
+
+To inspect or pause it: `GET /api/companies/{companyId}/routines` (find it by
+title) or `PATCH /api/routines/{routineId} { "status": "paused" }`.
