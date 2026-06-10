@@ -1,0 +1,237 @@
+{
+  "schema_version": 1,
+  "generated_by": "tools/scb/messenger-url-bulk-populate.js",
+  "suppliers": [
+    {
+      "issue": "EDD-191",
+      "supplier_code": "SUP-EDD147-001",
+      "displayed_supplier_name_expected": "Sheng Jie (Dongguan) Silicone Rubber Product Factory",
+      "cohort": "PIPE-100",
+      "display_name": "Sheng Jie (Dongguan) Silicone Rubber Product Factory",
+      "supplier_name_hint": "Ms Sun",
+      "storefront_url_hint": "https://dgshengjie.en.alibaba.com/",
+      "ali_id": "17380631591",
+      "messenger_url_sha256": "f6e76bb06cf59eacb8f799165b58a25026d1931bd0c7a43e208fce82733d3461",
+      "operator_account_hint": "us2...uao",
+      "source": {
+        "issue": "EDD-287",
+        "comment_id": "3e123874-3a2d-4847-a74a-c6e99a2ad3c4",
+        "captured_at_iso": "2026-05-30T03:28:06.027Z"
+      },
+      "status": "captured"
+    },
+    {
+      "issue": "EDD-192",
+      "supplier_code": "SUP-EDD147-002",
+      "displayed_supplier_name_expected": "Zhongshan Fangyuan Silicone Products Co., Ltd.",
+      "cohort": "PIPE-100",
+      "display_name": "Zhongshan Fangyuan Silicone Products Co., Ltd.",
+      "supplier_name_hint": "Whitney Wu",
+      "storefront_url_hint": "https://fysr.en.alibaba.com/",
+      "ali_id": "17380436478",
+      "messenger_url_sha256": "27ec7caf63461d6ce9e7951be18bbddfff24aecf56a24163a832c746d91388d6",
+      "operator_account_hint": "us2...uao",
+      "source": {
+        "issue": "EDD-287",
+        "comment_id": "3e123874-3a2d-4847-a74a-c6e99a2ad3c4",
+        "captured_at_iso": "2026-05-30T03:28:06.027Z"
+      },
+      "status": "captured"
+    },
+    {
+      "issue": "EDD-193",
+      "supplier_code": "SUP-EDD147-003",
+      "displayed_supplier_name_expected": "Wenzhou Fante Commodity Co., Ltd.",
+      "cohort": "PIPE-100",
+      "display_name": "Wenzhou Fante Commodity Co., Ltd.",
+      "supplier_name_hint": "Weng Shulei",
+      "storefront_url_hint": "https://cnfante.en.alibaba.com/",
+      "ali_id": "2216070920388",
+      "messenger_url_sha256": "475c93a8f6670981861586e1ceadec240f3b2bdc99b2eba32dab5934fa7e60ed",
+      "operator_account_hint": "us2...uao",
+      "source": {
+        "issue": "EDD-287",
+        "comment_id": "3e123874-3a2d-4847-a74a-c6e99a2ad3c4",
+        "captured_at_iso": "2026-05-30T03:28:06.027Z"
+      },
+      "status": "captured"
+    },
+    {
+      "issue": "EDD-194",
+      "supplier_code": "SUP-EDD147-004",
+      "displayed_supplier_name_expected": "Guangdong Wireking Housewares & Hardware Co., Ltd.",
+      "cohort": "PIPE-100",
+      "display_name": "Guangdong Wireking Housewares & Hardwar Co., Ltd.",
+      "supplier_name_hint": "WIREKING Y",
+      "storefront_url_hint": "https://wireking.en.alibaba.com/",
+      "ali_id": "17380034592",
+      "messenger_url_sha256": "81d7b3838c7acb4a0057473562deb4e9ba7edece221c3fb3198a3ea25a50b826",
+      "operator_account_hint": "us2...uao",
+      "source": {
+        "issue": "EDD-287",
+        "comment_id": "3e123874-3a2d-4847-a74a-c6e99a2ad3c4",
+        "captured_at_iso": "2026-05-30T03:28:06.027Z"
+      },
+      "status": "captured"
+    },
+    {
+      "issue": "EDD-195",
+      "supplier_code": "SUP-EDD147-005",
+      "displayed_supplier_name_expected": "Dongguan GMI Electronic Co., Ltd.",
+      "cohort": "PIPE-100",
+      "display_name": "Dongguan GMI Electronic Co., Ltd.",
+      "supplier_name_hint": "Ella Huang",
+      "storefront_url_hint": "https://guomirubber.en.alibaba.com/",
+      "ali_id": "2218256679583",
+      "messenger_url_sha256": "c7486e329ffe7a193f6c3814614f2e90458c111079fb6d63d802bddc6a36c2c1",
+      "operator_account_hint": "us2...uao",
+      "source": {
+        "issue": "EDD-287",
+        "comment_id": "3e123874-3a2d-4847-a74a-c6e99a2ad3c4",
+        "captured_at_iso": "2026-05-30T03:28:06.027Z"
+      },
+      "status": "captured"
+    },
+    {
+      "issue": "EDD-196",
+      "supplier_code": "SUP-EDD151-001",
+      "displayed_supplier_name_expected": "Cixi Hongmao Daily Necessities Co. Ltd.",
+      "cohort": "PIPE-105",
+      "display_name": "Cixi Hongmao Daily Necessities Co. Ltd.",
+      "messenger_url_sha256": null,
+      "operator_account_hint": "us2...uao",
+      "status": "missing_thread"
+    },
+    {
+      "issue": "EDD-197",
+      "supplier_code": "SUP-EDD151-002",
+      "displayed_supplier_name_expected": "Nantong Bonn Home Textile Co. Ltd.",
+      "cohort": "PIPE-105",
+      "display_name": "Nantong Bonn Home Textile Co. Ltd.",
+      "messenger_url_sha256": null,
+      "operator_account_hint": "us2...uao",
+      "status": "missing_thread"
+    },
+    {
+      "issue": "EDD-198",
+      "supplier_code": "SUP-EDD151-003",
+      "displayed_supplier_name_expected": "Yiwu Yuanyu Storage Products Co. Ltd.",
+      "cohort": "PIPE-105",
+      "display_name": "Yiwu Yuanyu Storage Products Co. Ltd.",
+      "messenger_url_sha256": null,
+      "operator_account_hint": "us2...uao",
+      "status": "missing_thread"
+    },
+    {
+      "issue": "EDD-199",
+      "supplier_code": "SUP-EDD151-004",
+      "displayed_supplier_name_expected": "Cangzhou Boxin Trading Co. Ltd.",
+      "cohort": "PIPE-105",
+      "display_name": "Cangzhou Boxin Trading Co. Ltd.",
+      "messenger_url_sha256": null,
+      "operator_account_hint": "us2...uao",
+      "status": "missing_thread"
+    },
+    {
+      "issue": "EDD-200",
+      "supplier_code": "SUP-EDD151-005",
+      "displayed_supplier_name_expected": "Shantou Chenghai Lecheng Houseware Co. Ltd.",
+      "cohort": "PIPE-105",
+      "display_name": "Shantou Chenghai Lecheng Houseware Co. Ltd.",
+      "messenger_url_sha256": null,
+      "operator_account_hint": "us2...uao",
+      "status": "missing_thread"
+    },
+    {
+      "issue": "EDD-201",
+      "supplier_code": "SUP-EDD152-001",
+      "displayed_supplier_name_expected": "Chaozhou Billion Day Stainless Steel Co. Ltd.",
+      "cohort": "PIPE-071",
+      "display_name": "Chaozhou Billion Day Stainless Steel Co., Ltd.",
+      "supplier_name_hint": "Angel Wang",
+      "storefront_url_hint": "https://czctyt.en.alibaba.com/",
+      "ali_id": "2216981962888",
+      "messenger_url_sha256": "ab0723214981c78b3b04de0e5f3f6a821fc9849cec015d8aa91b845d912de726",
+      "operator_account_hint": "us2...uao",
+      "source": {
+        "issue": "EDD-287",
+        "comment_id": "3e123874-3a2d-4847-a74a-c6e99a2ad3c4",
+        "captured_at_iso": "2026-05-30T03:28:06.027Z"
+      },
+      "status": "captured"
+    },
+    {
+      "issue": "EDD-202",
+      "supplier_code": "SUP-EDD152-002",
+      "displayed_supplier_name_expected": "Chaozhou Chaoan Caitang Yongyu Stainless Steel Products Factory",
+      "cohort": "PIPE-071",
+      "display_name": "Chaozhou Chaoan Caitang Yongyu Stainless Steel Products Factory",
+      "supplier_name_hint": "Elisa Huang",
+      "storefront_url_hint": "https://gdyongyu.en.alibaba.com/",
+      "ali_id": "2200863139244",
+      "messenger_url_sha256": "662b10f3e4b89fa77af29a79a0781430dcd5a6f976436ab816269d16e61a247c",
+      "operator_account_hint": "us2...uao",
+      "source": {
+        "issue": "EDD-287",
+        "comment_id": "3e123874-3a2d-4847-a74a-c6e99a2ad3c4",
+        "captured_at_iso": "2026-05-30T03:28:06.027Z"
+      },
+      "status": "captured"
+    },
+    {
+      "issue": "EDD-203",
+      "supplier_code": "SUP-EDD152-003",
+      "displayed_supplier_name_expected": "Chaozhou Caitang Lihong Hardware Equipment Factory",
+      "cohort": "PIPE-071",
+      "display_name": "Chaozhou Caitang Lihong Hardware Equipment Factory",
+      "supplier_name_hint": "Rich Li",
+      "storefront_url_hint": "https://yalida.en.alibaba.com/",
+      "ali_id": "2504260453",
+      "messenger_url_sha256": "3864cbd1fd1f9ceb63d60c98c8614c78d22ba188bbabd6687428414cd4b7503b",
+      "operator_account_hint": "us2...uao",
+      "source": {
+        "issue": "EDD-287",
+        "comment_id": "3e123874-3a2d-4847-a74a-c6e99a2ad3c4",
+        "captured_at_iso": "2026-05-30T03:28:06.027Z"
+      },
+      "status": "captured"
+    },
+    {
+      "issue": "EDD-204",
+      "supplier_code": "SUP-EDD152-004",
+      "displayed_supplier_name_expected": "Jiangmen Xinhe Stainless Steel Products Co. Ltd.",
+      "cohort": "PIPE-071",
+      "display_name": "Jiangmen Xinhe Stainless Steel Products Co.,ltd.",
+      "supplier_name_hint": "Winnie zhao",
+      "storefront_url_hint": "https://jmxinhe.en.alibaba.com/",
+      "ali_id": "2219393065576",
+      "messenger_url_sha256": "d6d852f583ef57abcd7ae87f0761bbd03a3fb77bedb894214659c719d87762e4",
+      "operator_account_hint": "us2...uao",
+      "source": {
+        "issue": "EDD-287",
+        "comment_id": "3e123874-3a2d-4847-a74a-c6e99a2ad3c4",
+        "captured_at_iso": "2026-05-30T03:28:06.027Z"
+      },
+      "status": "captured"
+    },
+    {
+      "issue": "EDD-205",
+      "supplier_code": "SUP-EDD152-005",
+      "displayed_supplier_name_expected": "Ningbo Gcheng Daily Necessities Co. Ltd.",
+      "cohort": "PIPE-071",
+      "display_name": "Ningbo Gcheng Daily Necessities Co., Ltd.",
+      "supplier_name_hint": "Nuan Han",
+      "storefront_url_hint": "https://nbgcheng.en.alibaba.com/",
+      "ali_id": "2212962232227",
+      "messenger_url_sha256": "9b8e929c50ae9ee65a32133a008acb328146ad2879d663b2ee50751f7a8097c1",
+      "operator_account_hint": "us2...uao",
+      "source": {
+        "issue": "EDD-287",
+        "comment_id": "3e123874-3a2d-4847-a74a-c6e99a2ad3c4",
+        "captured_at_iso": "2026-05-30T03:28:06.027Z"
+      },
+      "status": "captured"
+    }
+  ],
+  "updated_at_iso": "2026-06-10T07:07:05.569Z"
+}

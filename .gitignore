@@ -11,6 +11,9 @@ drizzle/meta/
 coverage/
 .DS_Store
 data/
+data/scb/*messenger_url*
+data/scb/*with-plaintext*
+data/scb/*plaintext*
 .paperclip/
 .pnpm-store/
 tmp-*
