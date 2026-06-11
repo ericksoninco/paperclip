@@ -7,6 +7,7 @@ import {
   asNumber,
   asString,
   buildPaperclipEnv,
+  normalizePaperclipWakePayload,
   parseObject,
   readPaperclipIssueWorkModeFromContext,
   renderPaperclipWakePrompt,
@@ -17,7 +18,7 @@ import { WebSocket } from "ws";
 
 type SessionKeyStrategy = "fixed" | "issue" | "run";
 
-type WakePayload = {
+export type WakePayload = {
   runId: string;
   agentId: string;
   companyId: string;
@@ -124,6 +125,7 @@ export const OPENCLAW_V4_AGENT_PARAM_KEYS = [
   "voiceWakeTrigger",
   "idempotencyKey",
   "label",
+  "paperclip",
 ] as const;
 
 const OPENCLAW_V4_AGENT_PARAM_KEY_SET = new Set<string>(OPENCLAW_V4_AGENT_PARAM_KEYS);
@@ -181,6 +183,7 @@ export function buildOpenClawAgentParams(input: {
   idempotencyKey: string;
   configuredAgentId: string | null;
   waitTimeoutMs: number;
+  paperclipWake?: Record<string, unknown> | null;
 }): Record<string, unknown> {
   const agentParams: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input.payloadTemplate)) {
@@ -201,7 +204,31 @@ export function buildOpenClawAgentParams(input: {
     agentParams.timeout = input.waitTimeoutMs;
   }
 
+  if (input.paperclipWake) {
+    agentParams.paperclip = {
+      ...(asRecord(agentParams.paperclip) ?? {}),
+      wake: input.paperclipWake,
+    };
+  }
+
   return agentParams;
+}
+
+export function buildOpenClawPaperclipWakeEnvelope(input: {
+  structuredWake: unknown;
+  wakePayload: WakePayload;
+}): Record<string, unknown> | null {
+  const normalized = normalizePaperclipWakePayload(input.structuredWake);
+  if (normalized) return parseObject(input.structuredWake);
+
+  const wake: Record<string, unknown> = {};
+  if (input.wakePayload.wakeReason) wake.reason = input.wakePayload.wakeReason;
+  if (input.wakePayload.wakeCommentId) {
+    wake.latestCommentId = input.wakePayload.wakeCommentId;
+    wake.commentIds = [input.wakePayload.wakeCommentId];
+  }
+
+  return Object.keys(wake).length > 0 ? wake : null;
 }
 
 function prefixSessionKeyForAgent(sessionKey: string, agentId: string | null): string {
@@ -1124,6 +1151,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const paperclipEnv = buildPaperclipEnvForWake(ctx, wakePayload);
   const structuredWakePrompt = renderPaperclipWakePrompt(ctx.context.paperclipWake);
   const structuredWakeJson = stringifyPaperclipWakePayload(ctx.context.paperclipWake);
+  const paperclipWake = buildOpenClawPaperclipWakeEnvelope({
+    structuredWake: ctx.context.paperclipWake,
+    wakePayload,
+  });
   const wakeText = buildWakeText(
     wakePayload,
     paperclipEnv,
@@ -1153,6 +1184,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     idempotencyKey: ctx.runId,
     configuredAgentId,
     waitTimeoutMs,
+    paperclipWake,
   });
 
   if (ctx.onMeta) {

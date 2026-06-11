@@ -621,9 +621,15 @@ describe("heartbeat comment wake batching", () => {
       expect(String(promotedPayload.message ?? "")).toContain("Queued follow-up");
 
       gateway.releaseFirstWait();
+      const promotedRunId = typeof promotedPayload.idempotencyKey === "string" ? promotedPayload.idempotencyKey : null;
+      expect(promotedRunId).toBeTruthy();
       await waitFor(async () => {
-        const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
-        return runs.length === 2 && runs.every((run) => ["cancelled", "succeeded"].includes(run.status));
+        const runs = await db
+          .select({ id: heartbeatRuns.id, status: heartbeatRuns.status })
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.agentId, agentId));
+        const statusById = new Map(runs.map((run) => [run.id, run.status]));
+        return statusById.get(firstRun!.id) === "cancelled" && statusById.get(promotedRunId!) === "succeeded";
       }, 90_000);
     } finally {
       gateway.releaseFirstWait();

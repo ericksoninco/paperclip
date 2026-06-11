@@ -2018,6 +2018,10 @@ describe("realizeExecutionWorkspace", () => {
     const bareRemote = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-worktree-bare-symref-"));
     await runGit(bareRemote, ["init", "--bare"]);
     await runGit(repoRoot, ["remote", "add", "origin", bareRemote]);
+    // Force-create master so the push below works regardless of the host's
+    // init.defaultBranch (CI defaults to master, where `git branch master`
+    // would fail because the branch already exists).
+    await runGit(repoRoot, ["branch", "-f", "master"]);
     await runGit(repoRoot, ["push", "-u", "origin", "main", "master"]);
     await runGit(repoRoot, ["fetch", "origin"]);
     // Explicitly set refs/remotes/origin/HEAD to exercise the symbolic-ref path
