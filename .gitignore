@@ -10,7 +10,11 @@ drizzle/meta/
 .vite/
 coverage/
 .DS_Store
-data/
+data/*
+!data/scb/
+data/scb/*
+!data/scb/supplier-registry.json
+!data/scb/supplier-cohort-manifest.json
 data/scb/*messenger_url*
 data/scb/*with-plaintext*
 data/scb/*plaintext*
