@@ -7,17 +7,20 @@ import {
   findReusableSupplierForTarget,
   populateIssueDescription,
   populateIssuesFromRegistry,
+  resolveSupplierMessengerUrl,
   sha256,
   supplierIdentityKey,
 } from "./messenger-url-bulk-populate.js";
 
-const messengerUrl = (() => {
+function messengerUrlFor(seed) {
   const url = new URL("https://message.alibaba.com/message/messenger.htm");
-  url.searchParams.set("activeAccountId", "123");
-  url.searchParams.set("activeAccountIdEncrypt", "abc");
-  url.searchParams.set("chatToken", "def");
+  url.searchParams.set("activeAccountId", `account-${seed}`);
+  url.searchParams.set("activeAccountIdEncrypt", `encrypt-${seed}`);
+  url.searchParams.set("chatToken", `token-${seed}`);
   return url.toString();
-})();
+}
+
+const messengerUrl = messengerUrlFor("primary");
 
 describe("supplier stable identity", () => {
   test("uses ali_id before normalized storefront host", () => {
@@ -129,6 +132,76 @@ describe("issue population", () => {
     assert.match(patched[0].description, /^Supplier\nmessenger_url: https:\/\/message\.alibaba\.com/m);
     assert.equal(logs.some((line) => line.includes(messengerUrl)), false);
     assert.equal(logs.some((line) => line.includes("populated sha256=")), true);
+  });
+
+  test("selects the matching supplier URL from a multi-conversation operator dump", async () => {
+    const firstUrl = messengerUrlFor("first");
+    const secondUrl = messengerUrlFor("second");
+    const dumpBody = JSON.stringify({
+      conversations: [
+        {
+          ali_id: "111",
+          storefront_url_hint: "https://first.example.alibaba.com/",
+          messenger_url: firstUrl,
+        },
+        {
+          ali_id: "222",
+          storefront_url_hint: "https://second.example.alibaba.com/",
+          messenger_url: secondUrl,
+        },
+      ],
+    });
+
+    const resolved = await resolveSupplierMessengerUrl(
+      {
+        supplier_code: "SUP-B-002",
+        ali_id: "222",
+        messenger_url_sha256: sha256(secondUrl),
+        source: { issue: "EDD-287", comment_id: "comment-1" },
+      },
+      {
+        fetchIssueByIdentifier: async () => ({ id: "source-issue", description: "" }),
+        fetchIssueComment: async () => ({ body: dumpBody }),
+      },
+    );
+
+    assert.equal(resolved, secondUrl);
+  });
+
+  test("rejects a matching identity when the source URL hash drifts", async () => {
+    const firstUrl = messengerUrlFor("first");
+    const secondUrl = messengerUrlFor("second");
+    const dumpBody = JSON.stringify({
+      conversations: [
+        {
+          ali_id: "111",
+          storefront_url_hint: "https://first.example.alibaba.com/",
+          messenger_url: firstUrl,
+        },
+        {
+          ali_id: "222",
+          storefront_url_hint: "https://second.example.alibaba.com/",
+          messenger_url: secondUrl,
+        },
+      ],
+    });
+
+    await assert.rejects(
+      () =>
+        resolveSupplierMessengerUrl(
+          {
+            supplier_code: "SUP-B-002",
+            ali_id: "222",
+            messenger_url_sha256: sha256(firstUrl),
+            source: { issue: "EDD-287", comment_id: "comment-1" },
+          },
+          {
+            fetchIssueByIdentifier: async () => ({ id: "source-issue", description: "" }),
+            fetchIssueComment: async () => ({ body: dumpBody }),
+          },
+        ),
+      /source sha256 drift/,
+    );
   });
 });
 

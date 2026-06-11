@@ -504,6 +504,68 @@ function extractIssueMessengerUrl(description) {
   return match ? match[1].trim() : null;
 }
 
+function extractDumpConversationsFromText(text) {
+  let dump;
+  try {
+    dump = extractDumpFromText(text);
+  } catch (error) {
+    return null;
+  }
+  return Array.isArray(dump.conversations) ? dump.conversations : null;
+}
+
+function selectConversationMessengerUrl(supplier, conversations) {
+  const supplierKey = supplierIdentityKey(supplier);
+  const identityMatches = [];
+  const hashMatches = [];
+  for (const conversation of conversations) {
+    if (!conversation.messenger_url) continue;
+    validateMessengerUrl(conversation.messenger_url);
+    const conversationHash = sha256(conversation.messenger_url);
+    const conversationKey = supplierIdentityKey(conversation);
+    if (supplierKey && conversationKey === supplierKey) {
+      identityMatches.push({ conversation, conversationHash });
+    }
+    if (supplier.messenger_url_sha256 && conversationHash === supplier.messenger_url_sha256) {
+      hashMatches.push({ conversation, conversationHash });
+    }
+  }
+
+  if (identityMatches.length > 0) {
+    const matchingHash = identityMatches.filter(
+      (match) => match.conversationHash === supplier.messenger_url_sha256,
+    );
+    if (matchingHash.length === 1) return matchingHash[0].conversation.messenger_url;
+    if (identityMatches.length === 1) return identityMatches[0].conversation.messenger_url;
+    throw new Error(
+      `${supplier.supplier_code} source dump has ${identityMatches.length} conversations for ` +
+        `${supplierKey}; cannot choose safely`,
+    );
+  }
+
+  if (hashMatches.length === 1) return hashMatches[0].conversation.messenger_url;
+  if (hashMatches.length > 1) {
+    throw new Error(
+      `${supplier.supplier_code} source dump has ${hashMatches.length} conversations with matching sha256`,
+    );
+  }
+  return null;
+}
+
+function resolveMessengerUrlFromSourceText(supplier, sourceText, sourceIssueIdentifier) {
+  const conversations = extractDumpConversationsFromText(sourceText);
+  if (conversations) {
+    const messengerUrl = selectConversationMessengerUrl(supplier, conversations);
+    if (!messengerUrl) {
+      throw new Error(
+        `${supplier.supplier_code} source ${sourceIssueIdentifier} has no matching dump conversation`,
+      );
+    }
+    return messengerUrl;
+  }
+  return extractIssueMessengerUrl(sourceText);
+}
+
 async function paperclipJson(pathname, options = {}) {
   const baseUrl = process.env.PAPERCLIP_API_URL;
   const apiKey = process.env.PAPERCLIP_API_KEY;
@@ -583,7 +645,11 @@ async function resolveSupplierMessengerUrl(supplier, deps = {}) {
     const sourceComment = await fetchComment(sourceIssue.id, supplier.source.comment_id);
     sourceText = commentBody(sourceComment);
   }
-  const messengerUrl = extractIssueMessengerUrl(sourceText);
+  const messengerUrl = resolveMessengerUrlFromSourceText(
+    supplier,
+    sourceText,
+    sourceIssueIdentifier,
+  );
   if (!messengerUrl) {
     throw new Error(`${supplier.supplier_code} source ${sourceIssueIdentifier} has no messenger_url`);
   }
@@ -728,6 +794,7 @@ export {
   normalizeStorefrontHost,
   populateIssueDescription,
   populateIssuesFromRegistry,
+  resolveMessengerUrlFromSourceText,
   resolveSupplierMessengerUrl,
   sha256,
   supplierIdentityKey,
