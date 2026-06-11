@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const DEFAULT_REGISTRY_FILE = path.join(
   "data",
@@ -10,120 +12,24 @@ const DEFAULT_REGISTRY_FILE = path.join(
   "supplier-registry.json",
 );
 
-const PIPE_100_COHORT = [
-  {
-    issue: "EDD-191",
-    supplier_code: "SUP-EDD147-001",
-    displayed_supplier_name_expected:
-      "Sheng Jie (Dongguan) Silicone Rubber Product Factory",
-    cohort: "PIPE-100",
-  },
-  {
-    issue: "EDD-192",
-    supplier_code: "SUP-EDD147-002",
-    displayed_supplier_name_expected:
-      "Zhongshan Fangyuan Silicone Products Co., Ltd.",
-    cohort: "PIPE-100",
-  },
-  {
-    issue: "EDD-193",
-    supplier_code: "SUP-EDD147-003",
-    displayed_supplier_name_expected: "Wenzhou Fante Commodity Co., Ltd.",
-    cohort: "PIPE-100",
-  },
-  {
-    issue: "EDD-194",
-    supplier_code: "SUP-EDD147-004",
-    displayed_supplier_name_expected:
-      "Guangdong Wireking Housewares & Hardware Co., Ltd.",
-    cohort: "PIPE-100",
-  },
-  {
-    issue: "EDD-195",
-    supplier_code: "SUP-EDD147-005",
-    displayed_supplier_name_expected: "Dongguan GMI Electronic Co., Ltd.",
-    cohort: "PIPE-100",
-  },
-  {
-    issue: "EDD-196",
-    supplier_code: "SUP-EDD151-001",
-    displayed_supplier_name_expected:
-      "Cixi Hongmao Daily Necessities Co. Ltd.",
-    cohort: "PIPE-105",
-  },
-  {
-    issue: "EDD-197",
-    supplier_code: "SUP-EDD151-002",
-    displayed_supplier_name_expected:
-      "Nantong Bonn Home Textile Co. Ltd.",
-    cohort: "PIPE-105",
-  },
-  {
-    issue: "EDD-198",
-    supplier_code: "SUP-EDD151-003",
-    displayed_supplier_name_expected:
-      "Yiwu Yuanyu Storage Products Co. Ltd.",
-    cohort: "PIPE-105",
-  },
-  {
-    issue: "EDD-199",
-    supplier_code: "SUP-EDD151-004",
-    displayed_supplier_name_expected: "Cangzhou Boxin Trading Co. Ltd.",
-    cohort: "PIPE-105",
-  },
-  {
-    issue: "EDD-200",
-    supplier_code: "SUP-EDD151-005",
-    displayed_supplier_name_expected:
-      "Shantou Chenghai Lecheng Houseware Co. Ltd.",
-    cohort: "PIPE-105",
-  },
-  {
-    issue: "EDD-201",
-    supplier_code: "SUP-EDD152-001",
-    displayed_supplier_name_expected:
-      "Chaozhou Billion Day Stainless Steel Co. Ltd.",
-    cohort: "PIPE-071",
-  },
-  {
-    issue: "EDD-202",
-    supplier_code: "SUP-EDD152-002",
-    displayed_supplier_name_expected:
-      "Chaozhou Chaoan Caitang Yongyu Stainless Steel Products Factory",
-    cohort: "PIPE-071",
-  },
-  {
-    issue: "EDD-203",
-    supplier_code: "SUP-EDD152-003",
-    displayed_supplier_name_expected:
-      "Chaozhou Caitang Lihong Hardware Equipment Factory",
-    cohort: "PIPE-071",
-  },
-  {
-    issue: "EDD-204",
-    supplier_code: "SUP-EDD152-004",
-    displayed_supplier_name_expected:
-      "Jiangmen Xinhe Stainless Steel Products Co. Ltd.",
-    cohort: "PIPE-071",
-  },
-  {
-    issue: "EDD-205",
-    supplier_code: "SUP-EDD152-005",
-    displayed_supplier_name_expected:
-      "Ningbo Gcheng Daily Necessities Co. Ltd.",
-    cohort: "PIPE-071",
-  },
-];
+const DEFAULT_MANIFEST_FILE = path.join(
+  "data",
+  "scb",
+  "supplier-cohort-manifest.json",
+);
 
 function usage() {
   console.log(`Usage:
   node tools/scb/messenger-url-bulk-populate.js --from-registry [--issues EDD-191,EDD-192] [--report-missing]
+  node tools/scb/messenger-url-bulk-populate.js --populate-issues --cohort PIPE-105 [--write]
   node tools/scb/messenger-url-bulk-populate.js --update-registry --dump-file dump.json [--report-missing]
   node tools/scb/messenger-url-bulk-populate.js --update-registry --from-comment comment-body.txt
 
 Options:
   --registry-file <path>  Registry JSON path (default: ${DEFAULT_REGISTRY_FILE})
+  --manifest-file <path>  Supplier cohort manifest path (default: ${DEFAULT_MANIFEST_FILE})
   --from-registry         Read messenger_url records from the registry
+  --populate-issues       Populate target issue body messenger_url fields from registry reuse
   --update-registry       Merge a validated operator dump into the registry
   --report-missing        Print supplier_codes without a messenger_url
   --dump-file <path>      Read operator dump JSON from a file
@@ -142,6 +48,7 @@ Options:
 function parseArgs(argv) {
   const args = {
     registryFile: DEFAULT_REGISTRY_FILE,
+    manifestFile: DEFAULT_MANIFEST_FILE,
     dryRun: true,
     write: false,
   };
@@ -149,6 +56,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === "--help" || arg === "-h") args.help = true;
     else if (arg === "--from-registry") args.fromRegistry = true;
+    else if (arg === "--populate-issues") args.populateIssues = true;
     else if (arg === "--update-registry") args.updateRegistry = true;
     else if (arg === "--report-missing") args.reportMissing = true;
     else if (arg === "--dry-run") args.dryRun = true;
@@ -157,6 +65,7 @@ function parseArgs(argv) {
     else if (arg === "--verify-issues") args.verifyIssues = true;
     else if (arg === "--with-plaintext") args.withPlaintext = true;
     else if (arg === "--registry-file") args.registryFile = requireValue(argv, ++i, arg);
+    else if (arg === "--manifest-file") args.manifestFile = requireValue(argv, ++i, arg);
     else if (arg === "--dump-file") args.dumpFile = requireValue(argv, ++i, arg);
     else if (arg === "--from-comment") {
       args.dumpFile = requireValue(argv, ++i, arg);
@@ -186,6 +95,50 @@ function readJsonFile(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
+function isGitIgnoredPath(file, cwd = process.cwd()) {
+  try {
+    execFileSync("git", ["check-ignore", "--quiet", "--", file], {
+      cwd,
+      stdio: "ignore",
+    });
+    return true;
+  } catch (error) {
+    if (error.status === 1) return false;
+    return false;
+  }
+}
+
+function assertPlaintextRegistryWriteAllowed(args, deps = {}) {
+  if (!args.withPlaintext || !args.write) return;
+  const isIgnored = deps.isGitIgnoredPath || isGitIgnoredPath;
+  if (!isIgnored(args.registryFile)) {
+    throw new Error(
+      "--with-plaintext --write requires --registry-file to point to a gitignored local-only path; " +
+        `${args.registryFile} is trackable`,
+    );
+  }
+}
+
+function loadSupplierManifest(file) {
+  if (!fs.existsSync(file)) return [];
+  const manifest = readJsonFile(file);
+  const suppliers = Array.isArray(manifest) ? manifest : manifest.suppliers;
+  if (!Array.isArray(suppliers)) {
+    throw new Error("Supplier manifest must be an array or contain suppliers[]");
+  }
+  const seenCodes = new Set();
+  return suppliers.map((supplier) => {
+    if (!supplier.issue) throw new Error("Manifest supplier missing issue");
+    if (!supplier.supplier_code) throw new Error("Manifest supplier missing supplier_code");
+    if (seenCodes.has(supplier.supplier_code)) {
+      throw new Error(`Duplicate supplier_code in manifest: ${supplier.supplier_code}`);
+    }
+    seenCodes.add(supplier.supplier_code);
+    const stable_identity_key = supplierIdentityKey(supplier);
+    return stable_identity_key ? { ...supplier, stable_identity_key } : { ...supplier };
+  });
+}
+
 function loadRegistry(file) {
   if (!fs.existsSync(file)) {
     return {
@@ -208,12 +161,20 @@ function validateRegistry(registry) {
   }
   const seenCodes = new Set();
   const seenHashes = new Map();
+  const seenCapturedIdentities = new Map();
   for (const supplier of registry.suppliers) {
     if (!supplier.supplier_code) throw new Error("Registry supplier missing supplier_code");
     if (seenCodes.has(supplier.supplier_code)) {
       throw new Error(`Duplicate supplier_code in registry: ${supplier.supplier_code}`);
     }
     seenCodes.add(supplier.supplier_code);
+    const stableIdentityKey = supplierIdentityKey(supplier);
+    if (supplier.stable_identity_key && stableIdentityKey && supplier.stable_identity_key !== stableIdentityKey) {
+      throw new Error(
+        `Registry stable_identity_key drift for ${supplier.supplier_code}: ` +
+          `${supplier.stable_identity_key} != ${stableIdentityKey}`,
+      );
+    }
     if (supplier.messenger_url) {
       validateMessengerUrl(supplier.messenger_url);
       const actual = sha256(supplier.messenger_url);
@@ -233,6 +194,16 @@ function validateRegistry(registry) {
         );
       }
       seenHashes.set(supplier.messenger_url_sha256, supplier.supplier_code);
+    }
+    if (stableIdentityKey && supplier.messenger_url_sha256) {
+      const existingCode = seenCapturedIdentities.get(stableIdentityKey);
+      if (existingCode && existingCode !== supplier.supplier_code) {
+        throw new Error(
+          `Duplicate captured stable identity ${stableIdentityKey} for ${existingCode} and ` +
+            supplier.supplier_code,
+        );
+      }
+      seenCapturedIdentities.set(stableIdentityKey, supplier.supplier_code);
     }
   }
 }
@@ -258,6 +229,37 @@ function validateMessengerUrl(value) {
 
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function normalizeStorefrontHost(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  try {
+    return new URL(raw).hostname.toLowerCase().replace(/^www\./, "");
+  } catch (error) {
+    return raw
+      .replace(/^https?:\/\//i, "")
+      .split("/")[0]
+      .toLowerCase()
+      .replace(/^www\./, "")
+      .trim() || null;
+  }
+}
+
+function supplierIdentityKey(supplier) {
+  const aliId = String(supplier.ali_id || "").trim();
+  if (aliId) return `ali_id:${aliId}`;
+  const host = normalizeStorefrontHost(supplier.storefront_url_hint);
+  return host ? `storefront_host:${host}` : null;
+}
+
+function applyStableIdentity(supplier) {
+  const stable_identity_key = supplierIdentityKey(supplier);
+  if (!stable_identity_key) {
+    const { stable_identity_key: _ignored, ...withoutIdentity } = supplier;
+    return withoutIdentity;
+  }
+  return { ...supplier, stable_identity_key };
 }
 
 function readDump(args) {
@@ -342,16 +344,49 @@ function matchConversationToSupplier(conversation, suppliers) {
   return best.supplier;
 }
 
-function cohortSupplierRows(registry) {
+function supplierUniverseRows(registry, args) {
+  const manifestRows = loadSupplierManifest(args.manifestFile);
   const byCode = new Map(registry.suppliers.map((supplier) => [supplier.supplier_code, supplier]));
-  return PIPE_100_COHORT.map((row) => ({ ...row, ...byCode.get(row.supplier_code) }));
+  const rows = manifestRows.map((row) => applyStableIdentity({ ...row, ...byCode.get(row.supplier_code) }));
+  for (const supplier of registry.suppliers) {
+    if (!byCode.has(supplier.supplier_code)) continue;
+    if (!rows.some((row) => row.supplier_code === supplier.supplier_code)) {
+      rows.push(applyStableIdentity(supplier));
+    }
+  }
+  return rows;
+}
+
+function capturedSupplierIdentityIndex(suppliers) {
+  const index = new Map();
+  for (const supplier of suppliers) {
+    if (!supplier.messenger_url_sha256) continue;
+    const stableIdentityKey = supplierIdentityKey(supplier);
+    if (!stableIdentityKey) continue;
+    const existing = index.get(stableIdentityKey);
+    if (existing && existing.supplier_code !== supplier.supplier_code) {
+      throw new Error(
+        `Duplicate captured stable identity ${stableIdentityKey} for ${existing.supplier_code} and ` +
+          supplier.supplier_code,
+      );
+    }
+    index.set(stableIdentityKey, supplier);
+  }
+  return index;
+}
+
+function findReusableSupplierForTarget(target, registrySuppliers) {
+  if (target.messenger_url_sha256) return target;
+  const stableIdentityKey = supplierIdentityKey(target);
+  if (!stableIdentityKey) return null;
+  return capturedSupplierIdentityIndex(registrySuppliers).get(stableIdentityKey) || null;
 }
 
 function mergeDumpIntoRegistry(registry, dump, args) {
   if (!Array.isArray(dump.conversations)) {
     throw new Error("Operator dump must contain conversations[]");
   }
-  const rows = cohortSupplierRows(registry);
+  const rows = supplierUniverseRows(registry, args);
   const byCode = new Map(registry.suppliers.map((supplier) => [supplier.supplier_code, supplier]));
   const updated = [];
   for (const conversation of dump.conversations) {
@@ -364,7 +399,13 @@ function mergeDumpIntoRegistry(registry, dump, args) {
       console.error(`warning: ${error.message}; skipping dump row`);
       continue;
     }
-    const existing = byCode.get(matched.supplier_code) || matched;
+    const matchedWithConversationIdentity = applyStableIdentity({
+      ...matched,
+      ali_id: conversation.ali_id || matched.ali_id || null,
+      storefront_url_hint: conversation.storefront_url_hint || matched.storefront_url_hint || null,
+    });
+    const reusable = findReusableSupplierForTarget(matchedWithConversationIdentity, registry.suppliers);
+    const existing = reusable || byCode.get(matched.supplier_code) || matchedWithConversationIdentity;
     if (
       existing.operator_account_hint &&
       dump.operator_account_hint &&
@@ -377,9 +418,9 @@ function mergeDumpIntoRegistry(registry, dump, args) {
     }
     const next = {
       ...existing,
-      supplier_code: matched.supplier_code,
-      issue: matched.issue,
-      cohort: matched.cohort,
+      supplier_code: existing.supplier_code || matched.supplier_code,
+      issue: existing.issue || matched.issue,
+      cohort: existing.cohort || matched.cohort,
       displayed_supplier_name_expected:
         matched.displayed_supplier_name_expected || conversation.displayed_supplier_name,
       display_name:
@@ -396,20 +437,21 @@ function mergeDumpIntoRegistry(registry, dump, args) {
       },
       status: "captured",
     };
+    Object.assign(next, applyStableIdentity(next));
     if (args.withPlaintext) next.messenger_url = conversation.messenger_url;
     else delete next.messenger_url;
     byCode.set(next.supplier_code, next);
     updated.push(next.supplier_code);
   }
-  for (const row of PIPE_100_COHORT) {
+  for (const row of supplierUniverseRows(registry, args)) {
     if (!byCode.has(row.supplier_code)) {
-      byCode.set(row.supplier_code, {
+      byCode.set(row.supplier_code, applyStableIdentity({
         ...row,
         display_name: row.displayed_supplier_name_expected,
         messenger_url_sha256: null,
         operator_account_hint: dump.operator_account_hint || null,
         status: "missing_thread",
-      });
+      }));
     }
   }
   registry.updated_at_iso = new Date().toISOString();
@@ -425,7 +467,7 @@ function mergeDumpIntoRegistry(registry, dump, args) {
 }
 
 function selectTargets(registry, args) {
-  let suppliers = registry.suppliers;
+  let suppliers = supplierUniverseRows(registry, args);
   if (args.cohort) suppliers = suppliers.filter((supplier) => supplier.cohort === args.cohort);
   if (args.issues) {
     const issueSet = new Set(args.issues);
@@ -434,10 +476,21 @@ function selectTargets(registry, args) {
   return suppliers;
 }
 
-function reportMissing(suppliers) {
-  const missing = suppliers
-    .filter((supplier) => !supplier.messenger_url_sha256)
+function collectMissingSupplierCodes(suppliers, registrySuppliers = suppliers) {
+  const capturedByIdentity = capturedSupplierIdentityIndex(registrySuppliers);
+  return suppliers
+    .filter((supplier) => {
+      if (supplier.messenger_url_sha256) return false;
+      const stableIdentityKey = supplierIdentityKey(supplier);
+      return !stableIdentityKey || !capturedByIdentity.has(stableIdentityKey);
+    })
     .map((supplier) => supplier.supplier_code);
+}
+
+function reportMissing(suppliers, registrySuppliers = suppliers) {
+  const missing = suppliers
+    ? collectMissingSupplierCodes(suppliers, registrySuppliers)
+    : [];
   if (missing.length === 0) {
     console.log("coverage_ok: no missing supplier_codes");
     return;
@@ -451,15 +504,22 @@ function extractIssueMessengerUrl(description) {
   return match ? match[1].trim() : null;
 }
 
-async function paperclipJson(pathname) {
+async function paperclipJson(pathname, options = {}) {
   const baseUrl = process.env.PAPERCLIP_API_URL;
   const apiKey = process.env.PAPERCLIP_API_KEY;
   if (!baseUrl || !apiKey) {
-    throw new Error("--verify-issues requires PAPERCLIP_API_URL and PAPERCLIP_API_KEY");
+    throw new Error("Paperclip API access requires PAPERCLIP_API_URL and PAPERCLIP_API_KEY");
   }
-  const response = await fetch(`${baseUrl}${pathname}`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    ...(options.headers || {}),
+  };
+  if (options.method && options.method !== "GET") {
+    const runId = process.env.PAPERCLIP_RUN_ID;
+    if (!runId) throw new Error(`${options.method} ${pathname} requires PAPERCLIP_RUN_ID`);
+    headers["X-Paperclip-Run-Id"] = runId;
+  }
+  const response = await fetch(`${baseUrl}${pathname}`, { ...options, headers });
   if (!response.ok) {
     throw new Error(`Paperclip API ${pathname} failed: ${response.status}`);
   }
@@ -477,6 +537,15 @@ async function fetchIssueByIdentifier(identifier) {
   if (!issue) throw new Error(`Issue not found: ${identifier}`);
   const detail = await paperclipJson(`/api/issues/${issue.id}`);
   return detail.issue || detail;
+}
+
+async function fetchIssueComment(issueId, commentId) {
+  const detail = await paperclipJson(`/api/issues/${issueId}/comments/${commentId}`);
+  return detail.comment || detail;
+}
+
+function commentBody(comment) {
+  return comment.body || comment.content || comment.text || "";
 }
 
 async function verifyIssueBodyHashes(suppliers) {
@@ -501,6 +570,103 @@ async function verifyIssueBodyHashes(suppliers) {
   }
 }
 
+async function resolveSupplierMessengerUrl(supplier, deps = {}) {
+  const fetchIssue = deps.fetchIssueByIdentifier || fetchIssueByIdentifier;
+  const fetchComment = deps.fetchIssueComment || fetchIssueComment;
+  const sourceIssueIdentifier = supplier.source?.issue || supplier.issue;
+  if (!sourceIssueIdentifier) {
+    throw new Error(`${supplier.supplier_code} has no source issue for messenger_url resolution`);
+  }
+  const sourceIssue = await fetchIssue(sourceIssueIdentifier);
+  let sourceText = sourceIssue.description || "";
+  if (supplier.source?.comment_id) {
+    const sourceComment = await fetchComment(sourceIssue.id, supplier.source.comment_id);
+    sourceText = commentBody(sourceComment);
+  }
+  const messengerUrl = extractIssueMessengerUrl(sourceText);
+  if (!messengerUrl) {
+    throw new Error(`${supplier.supplier_code} source ${sourceIssueIdentifier} has no messenger_url`);
+  }
+  validateMessengerUrl(messengerUrl);
+  const resolvedHash = sha256(messengerUrl);
+  if (resolvedHash !== supplier.messenger_url_sha256) {
+    throw new Error(
+      `${supplier.supplier_code} source sha256 drift: ${resolvedHash} != ${supplier.messenger_url_sha256}`,
+    );
+  }
+  return messengerUrl;
+}
+
+function populateIssueDescription(description, messengerUrl) {
+  const body = String(description || "");
+  const linePattern = /^([ \t]*messenger_url:[ \t]*)(.*)$/m;
+  if (linePattern.test(body)) {
+    return body.replace(linePattern, (_line, prefix) => `${prefix.trimEnd()} ${messengerUrl}`);
+  }
+  const separator = body.endsWith("\n") || body.length === 0 ? "" : "\n";
+  return `${body}${separator}\nmessenger_url: ${messengerUrl}\n`;
+}
+
+async function patchIssueDescription(issueId, description) {
+  const payload = JSON.stringify({ description });
+  const detail = await paperclipJson(`/api/issues/${issueId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: payload,
+  });
+  return detail.issue || detail;
+}
+
+async function populateIssuesFromRegistry(registry, args, deps = {}) {
+  const targets = selectTargets(registry, args);
+  const fetchIssue = deps.fetchIssueByIdentifier || fetchIssueByIdentifier;
+  const patchDescription = deps.patchIssueDescription || patchIssueDescription;
+  const reusableByCode = new Map();
+  for (const target of targets) {
+    const reusable = findReusableSupplierForTarget(target, registry.suppliers);
+    if (!reusable) continue;
+    reusableByCode.set(target.supplier_code, reusable);
+  }
+
+  for (const target of targets) {
+    const reusable = reusableByCode.get(target.supplier_code);
+    if (!reusable) {
+      console.log(`${target.issue} ${target.supplier_code} populate_missing_reusable_source`);
+      continue;
+    }
+    const messengerUrl = await resolveSupplierMessengerUrl(reusable, deps);
+    const targetIssue = await fetchIssue(target.issue);
+    const existingUrl = extractIssueMessengerUrl(targetIssue.description);
+    if (existingUrl) {
+      validateMessengerUrl(existingUrl);
+      const existingHash = sha256(existingUrl);
+      if (existingHash !== reusable.messenger_url_sha256) {
+        throw new Error(
+          `${target.issue} ${target.supplier_code} existing issue body sha256 drift: ` +
+            `${existingHash} != ${reusable.messenger_url_sha256}`,
+        );
+      }
+      console.log(
+        `${target.issue} ${target.supplier_code} already_populated sha256=${existingHash.slice(0, 8)}`,
+      );
+      continue;
+    }
+    const nextDescription = populateIssueDescription(targetIssue.description, messengerUrl);
+    if (args.write) {
+      await patchDescription(targetIssue.id, nextDescription);
+      console.log(
+        `${target.issue} ${target.supplier_code} populated sha256=${reusable.messenger_url_sha256.slice(0, 8)} ` +
+          `source=${reusable.source?.issue || reusable.issue}`,
+      );
+    } else {
+      console.log(
+        `${target.issue} ${target.supplier_code} dry_run_populate ` +
+          `sha256=${reusable.messenger_url_sha256.slice(0, 8)} source=${reusable.source?.issue || reusable.issue}`,
+      );
+    }
+  }
+}
+
 async function printRegistryActions(registry, args) {
   const suppliers = selectTargets(registry, args);
   for (const supplier of suppliers) {
@@ -518,7 +684,7 @@ async function printRegistryActions(registry, args) {
     );
   }
   if (args.verifyIssues) await verifyIssueBodyHashes(suppliers);
-  if (args.reportMissing) reportMissing(suppliers);
+  if (args.reportMissing) reportMissing(suppliers, registry.suppliers);
 }
 
 async function main() {
@@ -529,10 +695,11 @@ async function main() {
   }
   const registry = loadRegistry(args.registryFile);
   if (args.updateRegistry) {
+    assertPlaintextRegistryWriteAllowed(args);
     const dump = readDump(args);
     const updated = mergeDumpIntoRegistry(registry, dump, args);
     console.log(`registry_updated: ${updated.length} supplier(s)`);
-    if (args.reportMissing) reportMissing(registry.suppliers);
+    if (args.reportMissing) reportMissing(selectTargets(registry, args), registry.suppliers);
     if (args.write) {
       fs.mkdirSync(path.dirname(args.registryFile), { recursive: true });
       fs.writeFileSync(args.registryFile, `${JSON.stringify(registry, null, 2)}\n`);
@@ -542,16 +709,38 @@ async function main() {
   if (args.fromRegistry) {
     await printRegistryActions(registry, args);
   }
-  if (!args.updateRegistry && !args.fromRegistry && !args.reportMissing) {
+  if (args.populateIssues) {
+    await populateIssuesFromRegistry(registry, args);
+  }
+  if (!args.updateRegistry && !args.fromRegistry && !args.populateIssues && !args.reportMissing) {
     usage();
   } else if (args.reportMissing && !args.updateRegistry && !args.fromRegistry) {
-    reportMissing(selectTargets(registry, args));
+    reportMissing(selectTargets(registry, args), registry.suppliers);
   }
 }
 
-try {
-  await main();
-} catch (error) {
-  console.error(`error: ${error.message}`);
-  process.exit(1);
+export {
+  assertPlaintextRegistryWriteAllowed,
+  applyStableIdentity,
+  collectMissingSupplierCodes,
+  findReusableSupplierForTarget,
+  loadSupplierManifest,
+  normalizeStorefrontHost,
+  populateIssueDescription,
+  populateIssuesFromRegistry,
+  resolveSupplierMessengerUrl,
+  sha256,
+  supplierIdentityKey,
+};
+
+const isDirectRun =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectRun) {
+  try {
+    await main();
+  } catch (error) {
+    console.error(`error: ${error.message}`);
+    process.exit(1);
+  }
 }
