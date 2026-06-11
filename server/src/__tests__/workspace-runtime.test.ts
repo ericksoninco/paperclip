@@ -1785,6 +1785,97 @@ describe("realizeExecutionWorkspace", () => {
     expect(actualHead).toBe(expectedHead);
   }, 15_000);
 
+  it("self-heals a persisted git worktree whose directory exists but is no longer a linked worktree", async () => {
+    const repoRoot = await createTempRepo();
+    const branchName = "PAP-453-self-heal-torn-down-worktree";
+
+    await runGit(repoRoot, ["checkout", "-b", branchName]);
+    await fs.writeFile(path.join(repoRoot, "feature.txt"), "persisted\n", "utf8");
+    await runGit(repoRoot, ["add", "feature.txt"]);
+    await runGit(repoRoot, ["commit", "-m", "Add persisted feature"]);
+    const expectedHead = await readGit(repoRoot, ["rev-parse", branchName]);
+    await runGit(repoRoot, ["checkout", "main"]);
+
+    const initial = await realizeExecutionWorkspace({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+        },
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-453",
+        title: "Self-heal torn-down worktree",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    });
+    expect(initial.branchName).toBe(branchName);
+
+    // Tear the worktree down (deregister it from git) but leave a stale,
+    // non-git directory behind at the same path — the EDD-394 failure shape.
+    await runGit(repoRoot, ["worktree", "remove", "--force", initial.cwd]);
+    await fs.mkdir(initial.cwd, { recursive: true });
+    await fs.writeFile(path.join(initial.cwd, "stale.txt"), "stale\n", "utf8");
+    const worktreeListBefore = await readGit(repoRoot, ["worktree", "list", "--porcelain"]);
+    expect(worktreeListBefore).not.toContain(path.resolve(initial.cwd));
+
+    const restored = await ensurePersistedExecutionWorkspaceAvailable({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      workspace: {
+        mode: "isolated_workspace",
+        strategyType: "git_worktree",
+        cwd: initial.cwd,
+        providerRef: initial.worktreePath,
+        projectId: "project-1",
+        projectWorkspaceId: "workspace-1",
+        repoUrl: null,
+        baseRef: "HEAD",
+        branchName,
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-453",
+        title: "Self-heal torn-down worktree",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    });
+
+    expect(restored).not.toBeNull();
+    expect(restored?.cwd).toBe(initial.cwd);
+    expect(restored?.warnings.some((warning) => warning.includes("not a usable git worktree"))).toBe(true);
+    // Committed branch work is restored; the stale remnant is gone.
+    await expect(fs.readFile(path.join(initial.cwd, "feature.txt"), "utf8")).resolves.toBe("persisted\n");
+    await expect(fs.readFile(path.join(initial.cwd, "stale.txt"), "utf8")).rejects.toThrow();
+    const restoredHead = await readGit(initial.cwd, ["rev-parse", "HEAD"]);
+    expect(restoredHead).toBe(expectedHead);
+    const restoredTopLevel = await readGit(initial.cwd, ["rev-parse", "--show-toplevel"]);
+    expect(path.resolve(restoredTopLevel)).toBe(path.resolve(initial.cwd));
+  }, 15_000);
+
   it("reprovisions an existing persisted git worktree before manual control starts it", async () => {
     const repoRoot = await createTempRepo();
     await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });

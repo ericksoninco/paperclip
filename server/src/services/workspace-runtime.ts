@@ -1341,10 +1341,29 @@ export async function ensurePersistedExecutionWorkspaceAvailable(input: {
   }
   const repoRoot = await runGit(["rev-parse", "--show-toplevel"], input.base.baseCwd);
   const recordedBaseRefSha = readRecordedBaseRefSha(input.workspace.metadata);
-  if (await directoryExists(cwd)) {
+  const reuseWorktreePath = realized.worktreePath ?? cwd;
+  // A persisted workspace whose directory still exists on disk may nevertheless
+  // have been torn down out from under us — e.g. an inherited `reuse_existing`
+  // workspace whose creator worktree was `git worktree remove`d/pruned, leaving
+  // a stale directory that is no longer a registered linked git worktree (broken
+  // `.git` link). Trusting it would run git inside a detached directory and fail
+  // with "fatal: not a git repository", surfacing as `adapter_failed` and
+  // stranding review/continuation tasks. Validate before reuse; self-heal when
+  // the directory is present but unusable.
+  const directoryPresent = await directoryExists(cwd);
+  const reusableExistingWorktree =
+    directoryPresent &&
+    (await validateLinkedGitWorktree({
+      repoRoot,
+      worktreePath: reuseWorktreePath,
+      expectedBranchName: null,
+    })
+      .then((result) => result.valid)
+      .catch(() => false));
+  if (directoryPresent && reusableExistingWorktree) {
     const baseDrift = await inspectExecutionWorkspaceBaseDrift({
       repoRoot,
-      worktreePath: realized.worktreePath ?? cwd,
+      worktreePath: reuseWorktreePath,
       branchName: realized.branchName,
       baseRef: input.workspace.baseRef ?? input.base.repoRef ?? null,
       recordedBaseRefSha,
@@ -1359,7 +1378,7 @@ export async function ensurePersistedExecutionWorkspaceAvailable(input: {
         },
         base: input.base,
         repoRoot,
-        worktreePath: realized.worktreePath ?? cwd,
+        worktreePath: reuseWorktreePath,
         branchName: realized.branchName ?? "",
         issue: input.issue,
         agent: input.agent,
@@ -1368,6 +1387,18 @@ export async function ensurePersistedExecutionWorkspaceAvailable(input: {
       });
     }
     return realized;
+  }
+
+  const selfHealWarnings: string[] = [];
+  if (directoryPresent && !reusableExistingWorktree) {
+    // Torn-down/non-git directory: drop the stale remnants so the worktree can
+    // be re-realized cleanly below. Committed branch work is preserved in the
+    // shared object store and is restored by the `git worktree add` re-attach.
+    selfHealWarnings.push(
+      `Execution workspace path "${reuseWorktreePath}" existed but was not a usable git worktree; re-realizing it from the project base before this run.`,
+    );
+    await runGit(["worktree", "remove", "--force", reuseWorktreePath], repoRoot).catch(() => {});
+    await fs.rm(reuseWorktreePath, { recursive: true, force: true }).catch(() => {});
   }
 
   const worktreePath = realized.worktreePath ?? cwd;
@@ -1457,7 +1488,7 @@ export async function ensurePersistedExecutionWorkspaceAvailable(input: {
     ...realized,
     cwd: worktreePath,
     worktreePath,
-    warnings: [...restoreRefreshWarnings, ...baseDrift.warnings],
+    warnings: [...selfHealWarnings, ...restoreRefreshWarnings, ...baseDrift.warnings],
     created,
     baseRefSha:
       recordedBaseRefSha
