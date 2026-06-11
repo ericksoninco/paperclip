@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "suppliers": [
+    {
+      "issue": "EDD-191",
+      "supplier_code": "SUP-EDD147-001",
+      "displayed_supplier_name_expected": "Sheng Jie (Dongguan) Silicone Rubber Product Factory",
+      "cohort": "PIPE-100",
+      "storefront_url_hint": "https://dgshengjie.en.alibaba.com/",
+      "ali_id": "17380631591"
+    },
+    {
+      "issue": "EDD-192",
+      "supplier_code": "SUP-EDD147-002",
+      "displayed_supplier_name_expected": "Zhongshan Fangyuan Silicone Products Co., Ltd.",
+      "cohort": "PIPE-100",
+      "storefront_url_hint": "https://fysr.en.alibaba.com/",
+      "ali_id": "17380436478"
+    },
+    {
+      "issue": "EDD-193",
+      "supplier_code": "SUP-EDD147-003",
+      "displayed_supplier_name_expected": "Wenzhou Fante Commodity Co., Ltd.",
+      "cohort": "PIPE-100",
+      "storefront_url_hint": "https://cnfante.en.alibaba.com/",
+      "ali_id": "2216070920388"
+    },
+    {
+      "issue": "EDD-194",
+      "supplier_code": "SUP-EDD147-004",
+      "displayed_supplier_name_expected": "Guangdong Wireking Housewares & Hardware Co., Ltd.",
+      "cohort": "PIPE-100",
+      "storefront_url_hint": "https://wireking.en.alibaba.com/",
+      "ali_id": "17380034592"
+    },
+    {
+      "issue": "EDD-195",
+      "supplier_code": "SUP-EDD147-005",
+      "displayed_supplier_name_expected": "Dongguan GMI Electronic Co., Ltd.",
+      "cohort": "PIPE-100",
+      "storefront_url_hint": "https://guomirubber.en.alibaba.com/",
+      "ali_id": "2218256679583"
+    },
+    {
+      "issue": "EDD-196",
+      "supplier_code": "SUP-EDD151-001",
+      "displayed_supplier_name_expected": "Cixi Hongmao Daily Necessities Co. Ltd.",
+      "cohort": "PIPE-105"
+    },
+    {
+      "issue": "EDD-197",
+      "supplier_code": "SUP-EDD151-002",
+      "displayed_supplier_name_expected": "Nantong Bonn Home Textile Co. Ltd.",
+      "cohort": "PIPE-105"
+    },
+    {
+      "issue": "EDD-198",
+      "supplier_code": "SUP-EDD151-003",
+      "displayed_supplier_name_expected": "Yiwu Yuanyu Storage Products Co. Ltd.",
+      "cohort": "PIPE-105"
+    },
+    {
+      "issue": "EDD-199",
+      "supplier_code": "SUP-EDD151-004",
+      "displayed_supplier_name_expected": "Cangzhou Boxin Trading Co. Ltd.",
+      "cohort": "PIPE-105"
+    },
+    {
+      "issue": "EDD-200",
+      "supplier_code": "SUP-EDD151-005",
+      "displayed_supplier_name_expected": "Shantou Chenghai Lecheng Houseware Co. Ltd.",
+      "cohort": "PIPE-105"
+    },
+    {
+      "issue": "EDD-201",
+      "supplier_code": "SUP-EDD152-001",
+      "displayed_supplier_name_expected": "Chaozhou Billion Day Stainless Steel Co. Ltd.",
+      "cohort": "PIPE-071",
+      "storefront_url_hint": "https://czctyt.en.alibaba.com/",
+      "ali_id": "2216981962888"
+    },
+    {
+      "issue": "EDD-202",
+      "supplier_code": "SUP-EDD152-002",
+      "displayed_supplier_name_expected": "Chaozhou Chaoan Caitang Yongyu Stainless Steel Products Factory",
+      "cohort": "PIPE-071",
+      "storefront_url_hint": "https://gdyongyu.en.alibaba.com/",
+      "ali_id": "2200863139244"
+    },
+    {
+      "issue": "EDD-203",
+      "supplier_code": "SUP-EDD152-003",
+      "displayed_supplier_name_expected": "Chaozhou Caitang Lihong Hardware Equipment Factory",
+      "cohort": "PIPE-071",
+      "storefront_url_hint": "https://yalida.en.alibaba.com/",
+      "ali_id": "2504260453"
+    },
+    {
+      "issue": "EDD-204",
+      "supplier_code": "SUP-EDD152-004",
+      "displayed_supplier_name_expected": "Jiangmen Xinhe Stainless Steel Products Co. Ltd.",
+      "cohort": "PIPE-071",
+      "storefront_url_hint": "https://jmxinhe.en.alibaba.com/",
+      "ali_id": "2219393065576"
+    },
+    {
+      "issue": "EDD-205",
+      "supplier_code": "SUP-EDD152-005",
+      "displayed_supplier_name_expected": "Ningbo Gcheng Daily Necessities Co. Ltd.",
+      "cohort": "PIPE-071",
+      "storefront_url_hint": "https://nbgcheng.en.alibaba.com/",
+      "ali_id": "2212962232227"
+    }
+  ]
+}
