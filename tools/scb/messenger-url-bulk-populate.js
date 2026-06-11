@@ -504,14 +504,31 @@ function extractIssueMessengerUrl(description) {
   return match ? match[1].trim() : null;
 }
 
+function hasJsonObjectCandidate(text) {
+  const source = String(text || "");
+  return source.trim().startsWith("{") || /```(?:json)?\s*[\s\S]*?```/.test(source) || source.includes("{");
+}
+
 function extractDumpConversationsFromText(text) {
   let dump;
   try {
     dump = extractDumpFromText(text);
   } catch (error) {
+    if (hasJsonObjectCandidate(text) && error.message !== "Could not find a JSON operator dump") {
+      throw error;
+    }
     return null;
   }
   return Array.isArray(dump.conversations) ? dump.conversations : null;
+}
+
+function stableIdentityMatchesConversation(supplier, conversation) {
+  const supplierAliId = String(supplier.ali_id || "").trim();
+  const conversationAliId = String(conversation.ali_id || "").trim();
+  if (supplierAliId && conversationAliId) return supplierAliId === conversationAliId;
+  const supplierHost = normalizeStorefrontHost(supplier.storefront_url_hint);
+  const conversationHost = normalizeStorefrontHost(conversation.storefront_url_hint);
+  return Boolean(supplierHost && conversationHost && supplierHost === conversationHost);
 }
 
 function selectConversationMessengerUrl(supplier, conversations) {
@@ -522,8 +539,7 @@ function selectConversationMessengerUrl(supplier, conversations) {
     if (!conversation.messenger_url) continue;
     validateMessengerUrl(conversation.messenger_url);
     const conversationHash = sha256(conversation.messenger_url);
-    const conversationKey = supplierIdentityKey(conversation);
-    if (supplierKey && conversationKey === supplierKey) {
+    if (stableIdentityMatchesConversation(supplier, conversation)) {
       identityMatches.push({ conversation, conversationHash });
     }
     if (supplier.messenger_url_sha256 && conversationHash === supplier.messenger_url_sha256) {

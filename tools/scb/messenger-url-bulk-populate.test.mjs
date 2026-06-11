@@ -168,6 +168,39 @@ describe("issue population", () => {
     assert.equal(resolved, secondUrl);
   });
 
+  test("falls back to storefront host when a dump conversation has no ali_id", async () => {
+    const firstUrl = messengerUrlFor("first");
+    const secondUrl = messengerUrlFor("second");
+    const dumpBody = JSON.stringify({
+      conversations: [
+        {
+          storefront_url_hint: "https://first.example.alibaba.com/",
+          messenger_url: firstUrl,
+        },
+        {
+          storefront_url_hint: "https://second.example.alibaba.com/path",
+          messenger_url: secondUrl,
+        },
+      ],
+    });
+
+    const resolved = await resolveSupplierMessengerUrl(
+      {
+        supplier_code: "SUP-B-002",
+        ali_id: "222",
+        storefront_url_hint: "https://second.example.alibaba.com/",
+        messenger_url_sha256: sha256(secondUrl),
+        source: { issue: "EDD-287", comment_id: "comment-1" },
+      },
+      {
+        fetchIssueByIdentifier: async () => ({ id: "source-issue", description: "" }),
+        fetchIssueComment: async () => ({ body: dumpBody }),
+      },
+    );
+
+    assert.equal(resolved, secondUrl);
+  });
+
   test("rejects a matching identity when the source URL hash drifts", async () => {
     const firstUrl = messengerUrlFor("first");
     const secondUrl = messengerUrlFor("second");
