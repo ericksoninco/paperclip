@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildOpenClawAgentParams,
+  buildOpenClawPaperclipWakeEnvelope,
   OPENCLAW_V4_AGENT_PARAM_KEYS,
   PROTOCOL_VERSION,
   resolveSessionKey,
@@ -83,9 +84,9 @@ describe("buildOpenClawAgentParams", () => {
     });
 
     expect(Object.keys(params).sort()).toEqual(
-      ["agentId", "idempotencyKey", "message", "model", "provider", "sessionKey", "timeout"].sort(),
+      ["agentId", "idempotencyKey", "message", "model", "paperclip", "provider", "sessionKey", "timeout"].sort(),
     );
-    expect(params).not.toHaveProperty("paperclip");
+    expect(params.paperclip).toEqual({ runId: "run-123" });
     expect(params).not.toHaveProperty("text");
     expect(params).not.toHaveProperty("unsupported");
     expect(
@@ -105,5 +106,103 @@ describe("buildOpenClawAgentParams", () => {
 
     expect(params.agentId).toBe("configured-agent");
     expect(params.timeout).toBe(30_000);
+  });
+
+  it("attaches generated Paperclip wake envelope while preserving template metadata", () => {
+    const params = buildOpenClawAgentParams({
+      payloadTemplate: {
+        paperclip: {
+          source: "template",
+          wake: { stale: true },
+        },
+      },
+      message: "rendered wake message",
+      sessionKey: "paperclip:issue:issue-456",
+      idempotencyKey: "run-123",
+      configuredAgentId: null,
+      waitTimeoutMs: 30_000,
+      paperclipWake: {
+        reason: "issue_commented",
+        commentIds: ["comment-1", "comment-2"],
+        latestCommentId: "comment-2",
+      },
+    });
+
+    expect(params.paperclip).toEqual({
+      source: "template",
+      wake: {
+        reason: "issue_commented",
+        commentIds: ["comment-1", "comment-2"],
+        latestCommentId: "comment-2",
+      },
+    });
+  });
+});
+
+describe("buildOpenClawPaperclipWakeEnvelope", () => {
+  it("normalizes the structured Paperclip wake payload for OpenClaw agent params", () => {
+    const wake = buildOpenClawPaperclipWakeEnvelope({
+      structuredWake: {
+        reason: "issue_assigned",
+        issue: {
+          id: "issue-123",
+          identifier: "EDD-123",
+          title: "Fix it",
+          status: "in_progress",
+          priority: "high",
+        },
+        checkedOutByHarness: true,
+        commentIds: [],
+      },
+      wakePayload: {
+        runId: "run-123",
+        agentId: "agent-123",
+        companyId: "company-123",
+        taskId: "issue-123",
+        issueId: "issue-123",
+        wakeReason: "issue_assigned",
+        wakeCommentId: null,
+        approvalId: null,
+        approvalStatus: null,
+        issueIds: [],
+      },
+    });
+
+    expect(wake).toMatchObject({
+      reason: "issue_assigned",
+      issue: {
+        id: "issue-123",
+        identifier: "EDD-123",
+        title: "Fix it",
+        status: "in_progress",
+        priority: "high",
+      },
+      checkedOutByHarness: true,
+      commentIds: [],
+    });
+  });
+
+  it("falls back to scalar wake context when no structured payload exists", () => {
+    const wake = buildOpenClawPaperclipWakeEnvelope({
+      structuredWake: null,
+      wakePayload: {
+        runId: "run-123",
+        agentId: "agent-123",
+        companyId: "company-123",
+        taskId: "issue-123",
+        issueId: "issue-123",
+        wakeReason: "issue_commented",
+        wakeCommentId: "comment-123",
+        approvalId: null,
+        approvalStatus: null,
+        issueIds: [],
+      },
+    });
+
+    expect(wake).toEqual({
+      reason: "issue_commented",
+      latestCommentId: "comment-123",
+      commentIds: ["comment-123"],
+    });
   });
 });
