@@ -1841,6 +1841,13 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
 
   async function resolveStrandedIssueRecoveryOwnerAgentId(issue: typeof issues.$inferSelect) {
     const candidateIds: string[] = [];
+    // Prefer the issue's natural owner (its assignee / returnOwner). A stranded
+    // review or continuation task should return to the agent who owns it — e.g.
+    // a QA re-review goes back to QA — rather than escalating up the management
+    // chain to a manager/CTO/CEO who is the wrong owner for the work. The
+    // invokable + budget gate below keeps this safe: if the assignee cannot run,
+    // we fall through to the management-chain candidates.
+    if (issue.assigneeAgentId) candidateIds.push(issue.assigneeAgentId);
     if (issue.assigneeAgentId) {
       const assignee = await getAgent(issue.assigneeAgentId);
       if (assignee?.reportsTo) candidateIds.push(assignee.reportsTo);
@@ -1857,7 +1864,6 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       .where(and(eq(agents.companyId, issue.companyId), inArray(agents.role, ["cto", "ceo"])))
       .orderBy(sql`case when ${agents.role} = 'cto' then 0 else 1 end`, asc(agents.createdAt));
     candidateIds.push(...roleCandidates.map((agent) => agent.id));
-    if (issue.assigneeAgentId) candidateIds.push(issue.assigneeAgentId);
 
     const seen = new Set<string>();
     for (const agentId of candidateIds) {
