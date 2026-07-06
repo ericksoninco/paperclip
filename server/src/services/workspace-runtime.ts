@@ -1178,7 +1178,33 @@ export async function realizeExecutionWorkspace(input: {
     };
   }
 
-  const repoRoot = await resolveGitOwnerRepoRoot(input.base.baseCwd);
+  // A `git_worktree` strategy requires the base cwd to be inside a git repo so
+  // we can resolve the owning repo root and add a linked worktree. When the
+  // base is a non-git directory (e.g. a project-less issue that fell back to the
+  // agent-home workspace), `resolveGitOwnerRepoRoot` throws
+  // "fatal: not a git repository", which surfaces as `adapter_failed` and
+  // dead-blocks the issue. Degrade to `project_primary` (run in place) with a
+  // recorded warning instead of handing the adapter a `.git`-less directory.
+  // See EDD-398 / EDD-1311.
+  let repoRoot: string;
+  try {
+    repoRoot = await resolveGitOwnerRepoRoot(input.base.baseCwd);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      ...input.base,
+      strategy: "project_primary",
+      cwd: input.base.baseCwd,
+      branchName: null,
+      worktreePath: null,
+      warnings: [
+        `Requested a git worktree but the base workspace "${input.base.baseCwd}" is not inside a git repository (${detail}). ` +
+          "Running in place with the project-primary workspace instead of failing the run.",
+      ],
+      created: false,
+      baseRefSha: null,
+    };
+  }
   const branchTemplate = asString(rawStrategy.branchTemplate, "{{issue.identifier}}-{{slug}}");
   const renderedBranch = renderWorkspaceTemplate(branchTemplate, {
     issue: input.issue,

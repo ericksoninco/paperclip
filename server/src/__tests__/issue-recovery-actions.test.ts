@@ -11,11 +11,13 @@ import {
   createDb,
   environmentLeases,
   environments,
+  executionWorkspaces,
   heartbeatRuns,
   issueComments,
   issueRecoveryActions,
   issueRelations,
   issues,
+  projects,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -139,7 +141,9 @@ describeEmbeddedPostgres("issue recovery actions", () => {
     await db.delete(heartbeatRuns);
     await db.delete(agentWakeupRequests);
     await db.delete(environments);
+    await db.delete(executionWorkspaces);
     await db.delete(issues);
+    await db.delete(projects);
     await db.delete(agents);
     await db.delete(companies);
   });
@@ -322,6 +326,75 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       sourceIssueId: sourceIssue.id,
       recoveryCause: "stranded_assigned_issue",
     });
+  });
+
+  it("reroutes a torn-down reused git worktree to a fresh isolated workspace instead of dead-blocking", async () => {
+    // EDD-1311: an in_progress issue that reuses (`reuse_existing`) a git_worktree
+    // execution workspace which has been torn down out from under it fails the
+    // adapter with "not a git repository". Recovery must clear the stale
+    // workspace binding (forcing a fresh isolated workspace) and requeue the
+    // continuation rather than escalating straight to `blocked`. This also
+    // covers isolated-mode reuse (not only shared_workspace).
+    const { companyId, coderId, sourceIssue } = await seedCompany();
+
+    const projectId = randomUUID();
+    await db.insert(projects).values({ id: projectId, companyId, name: "Recovery Project" });
+
+    const workspaceId = randomUUID();
+    await db.insert(executionWorkspaces).values({
+      id: workspaceId,
+      companyId,
+      projectId,
+      mode: "isolated_workspace",
+      strategyType: "git_worktree",
+      name: "reused-worktree",
+      status: "active",
+    });
+
+    await db
+      .update(issues)
+      .set({
+        executionWorkspaceId: workspaceId,
+        executionWorkspacePreference: "reuse_existing",
+        executionWorkspaceSettings: { mode: "isolated_workspace" },
+      })
+      .where(eq(issues.id, sourceIssue.id));
+
+    await db.insert(heartbeatRuns).values({
+      id: randomUUID(),
+      companyId,
+      agentId: coderId,
+      invocationSource: "automation",
+      status: "failed",
+      error: "fatal: not a git repository (or any of the parent directories): .git",
+      errorCode: "adapter_failed",
+      startedAt: new Date("2026-05-13T18:00:00.000Z"),
+      contextSnapshot: { issueId: sourceIssue.id, retryReason: "issue_continuation_needed" },
+    });
+
+    const enqueueWakeup = vi.fn(async () => ({ id: randomUUID() }));
+    const recovery = recoveryService(db, { enqueueWakeup });
+
+    const result = await recovery.reconcileStrandedAssignedIssues();
+
+    expect(result.continuationRequeued).toBe(1);
+    expect(result.escalated).toBe(0);
+
+    const [updatedIssue] = await db.select().from(issues).where(eq(issues.id, sourceIssue.id));
+    expect(updatedIssue?.status).toBe("in_progress");
+    expect(updatedIssue?.executionWorkspaceId).toBeNull();
+    expect(updatedIssue?.executionWorkspacePreference).toBeNull();
+    expect(updatedIssue?.executionWorkspaceSettings).toMatchObject({ mode: "isolated_workspace" });
+
+    expect(enqueueWakeup).toHaveBeenCalledTimes(1);
+    expect(enqueueWakeup.mock.calls[0]?.[0]).toBe(coderId);
+    expect(enqueueWakeup.mock.calls[0]?.[1]?.reason).toBe("issue_continuation_needed");
+
+    const recoveryActions = await db
+      .select()
+      .from(issueRecoveryActions)
+      .where(eq(issueRecoveryActions.sourceIssueId, sourceIssue.id));
+    expect(recoveryActions).toHaveLength(0);
   });
 
   it("routes a stranded assigned issue back to its assignee (natural owner) instead of up the management chain", async () => {

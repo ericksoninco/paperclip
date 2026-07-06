@@ -360,6 +360,47 @@ describe("realizeExecutionWorkspace", () => {
     expect(await readGit(workspace.cwd, ["rev-parse", "HEAD"])).toBe(expectedRemoteHead);
   });
 
+  it("degrades a git_worktree request to project_primary when the base is not a git repository", async () => {
+    // Regression for EDD-1311 / EDD-398: a project-less issue whose base cwd
+    // falls back to the non-git agent-home directory must not throw
+    // "fatal: not a git repository" (which surfaces as adapter_failed and
+    // dead-blocks the issue). It should run in place with a recorded warning.
+    const nonGitBase = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-nongit-base-"));
+
+    const workspace = await realizeExecutionWorkspace({
+      base: {
+        baseCwd: nonGitBase,
+        source: "agent_home",
+        projectId: null,
+        workspaceId: null,
+        repoUrl: null,
+        repoRef: null,
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+        },
+      },
+      issue: {
+        id: "issue-nongit",
+        identifier: "EDD-1311",
+        title: "Recovery non-git base",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    });
+
+    expect(workspace.strategy).toBe("project_primary");
+    expect(workspace.cwd).toBe(nonGitBase);
+    expect(workspace.worktreePath).toBeNull();
+    expect(workspace.created).toBe(false);
+    expect(workspace.warnings.join(" ")).toContain("not inside a git repository");
+  });
+
   it("creates and reuses a git worktree for an issue-scoped branch", async () => {
     const repoRoot = await createTempRepo();
 
