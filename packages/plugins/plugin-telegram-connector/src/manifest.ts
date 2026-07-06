@@ -1,5 +1,9 @@
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 import { INBOUND_JOB_KEY, PLUGIN_ID, PLUGIN_VERSION } from "./constants.js";
+import {
+  TELEGRAM_LONG_POLL_TIMEOUT_SECONDS_DEFAULT,
+  TELEGRAM_LONG_POLL_TIMEOUT_SECONDS_MAX,
+} from "./polling-config.js";
 
 const manifest: PaperclipPluginManifestV1 = {
   id: PLUGIN_ID,
@@ -58,9 +62,9 @@ const manifest: PaperclipPluginManifestV1 = {
       timeoutSeconds: {
         type: "number",
         title: "Long-poll timeout seconds",
-        default: 45,
+        default: TELEGRAM_LONG_POLL_TIMEOUT_SECONDS_DEFAULT,
         minimum: 0,
-        maximum: 45,
+        maximum: TELEGRAM_LONG_POLL_TIMEOUT_SECONDS_MAX,
       },
     },
     required: ["tokenSecretRef"],

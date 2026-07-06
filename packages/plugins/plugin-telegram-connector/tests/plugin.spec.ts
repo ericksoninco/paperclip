@@ -4,6 +4,11 @@ import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import manifest from "../src/manifest.js";
 import plugin, { pollTelegramInbound } from "../src/worker.js";
 import { INBOUND_JOB_KEY, OFFSET_STATE_KEY, ORIGIN_KIND, PROCESSED_UPDATE_PREFIX, STATE_NAMESPACE } from "../src/constants.js";
+import {
+  HTTP_FETCH_BRIDGE_TIMEOUT_SECONDS,
+  TELEGRAM_LONG_POLL_TIMEOUT_SECONDS_DEFAULT,
+  TELEGRAM_LONG_POLL_TIMEOUT_SECONDS_MAX,
+} from "../src/polling-config.js";
 
 function companyStateKey(companyId: string, stateKey: string) {
   return { scopeKind: "company" as const, scopeId: companyId, namespace: STATE_NAMESPACE, stateKey };
@@ -81,10 +86,50 @@ describe("telegram connector plugin", () => {
     }));
     const configProperties = (manifest.instanceConfigSchema as { properties: Record<string, unknown> }).properties;
     expect(configProperties.timeoutSeconds).toMatchObject({
-      default: 45,
-      maximum: 45,
+      default: TELEGRAM_LONG_POLL_TIMEOUT_SECONDS_DEFAULT,
+      maximum: TELEGRAM_LONG_POLL_TIMEOUT_SECONDS_MAX,
     });
+    expect(TELEGRAM_LONG_POLL_TIMEOUT_SECONDS_DEFAULT).toBeLessThan(HTTP_FETCH_BRIDGE_TIMEOUT_SECONDS);
+    expect(TELEGRAM_LONG_POLL_TIMEOUT_SECONDS_MAX).toBeLessThan(HTTP_FETCH_BRIDGE_TIMEOUT_SECONDS);
     expect(configProperties).toHaveProperty("companyId");
+  });
+
+  it("keeps getUpdates long-polls below the host http.fetch bridge timeout", async () => {
+    const harness = createTestHarness({ manifest });
+    harness.setConfig({
+      tokenSecretRef: "TELEGRAM_BOT_TOKEN",
+      timeoutSeconds: HTTP_FETCH_BRIDGE_TIMEOUT_SECONDS + 15,
+    });
+
+    const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () =>
+      new Response(JSON.stringify({ ok: true, result: [] }), { status: 200 })
+    );
+    harness.ctx.http.fetch = fetchMock;
+    harness.ctx.secrets.resolve = async () => "token";
+
+    const result = await pollTelegramInbound(harness.ctx, "company-1");
+
+    expect(result).toMatchObject({ fetched: 0, routed: 0, skipped: 0, nextOffset: null });
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(Number(url.searchParams.get("timeout"))).toBe(TELEGRAM_LONG_POLL_TIMEOUT_SECONDS_MAX);
+    expect(Number(url.searchParams.get("timeout"))).toBeLessThan(HTTP_FETCH_BRIDGE_TIMEOUT_SECONDS);
+  });
+
+  it("uses the safe long-poll timeout by default", async () => {
+    const harness = createTestHarness({ manifest });
+    harness.setConfig({ tokenSecretRef: "TELEGRAM_BOT_TOKEN" });
+
+    const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () =>
+      new Response(JSON.stringify({ ok: true, result: [] }), { status: 200 })
+    );
+    harness.ctx.http.fetch = fetchMock;
+    harness.ctx.secrets.resolve = async () => "token";
+
+    await pollTelegramInbound(harness.ctx, "company-1");
+
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(Number(url.searchParams.get("timeout"))).toBe(TELEGRAM_LONG_POLL_TIMEOUT_SECONDS_DEFAULT);
+    expect(Number(url.searchParams.get("timeout"))).toBeLessThan(HTTP_FETCH_BRIDGE_TIMEOUT_SECONDS);
   });
 
   it("routes allowed Telegram messages into assigned Paperclip issues exactly once", async () => {
