@@ -2,6 +2,9 @@ packages:
   - packages/*
   - packages/adapters/*
   - packages/plugins/*
+  # Keep the first-party Telegram connector installable as a standalone plugin
+  # without forcing PRs to commit pnpm-lock.yaml for a new workspace importer.
+  - "!packages/plugins/plugin-telegram-connector"
   # Keep sandbox-provider plugins installable as standalone packages without
   # forcing root pnpm-lock.yaml churn for their third-party deps.
   - "!packages/plugins/sandbox-providers/**"
