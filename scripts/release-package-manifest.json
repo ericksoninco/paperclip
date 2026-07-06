@@ -77,7 +77,7 @@
   {
     "dir": "packages/plugins/plugin-telegram-connector",
     "name": "@paperclipai/plugin-telegram-connector",
-    "publishFromCi": true
+    "publishFromCi": false
   },
   {
     "dir": "packages/plugins/plugin-workspace-diff",
