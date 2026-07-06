@@ -62,6 +62,7 @@ import {
   writePluginLocalFolderTextAtomic,
 } from "./plugin-local-folders.js";
 import { createPluginSecretsHandler } from "./plugin-secrets-handler.js";
+import { secretService } from "./secrets.js";
 import { logActivity } from "./activity-log.js";
 import type { PluginEventBus } from "./plugin-event-bus.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
@@ -484,12 +485,16 @@ export function buildHostServices(
   pluginKey: string,
   eventBus: PluginEventBus,
   notifyWorker?: (method: string, params: unknown) => void,
-  options: { pluginWorkerManager?: PluginWorkerManager; manifest?: import("@paperclipai/shared").PaperclipPluginManifestV1 } = {},
+  options: {
+    pluginWorkerManager?: PluginWorkerManager;
+    manifest?: import("@paperclipai/shared").PaperclipPluginManifestV1;
+    secretService?: Pick<ReturnType<typeof secretService>, "resolveSecretValue">;
+  } = {},
 ): HostServices & { dispose(): void } {
   const registry = pluginRegistryService(db);
   const stateStore = pluginStateStore(db);
   const pluginDb = pluginDatabaseService(db);
-  const secretsHandler = createPluginSecretsHandler({ db, pluginId });
+  const secretsHandler = createPluginSecretsHandler({ db, pluginId, secretService: options.secretService });
   const companies = companyService(db);
   const agents = agentService(db);
   const managedAgents = pluginManagedAgentService(db, {

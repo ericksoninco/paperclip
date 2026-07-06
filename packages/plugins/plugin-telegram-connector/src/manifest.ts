@@ -30,6 +30,7 @@ const manifest: PaperclipPluginManifestV1 = {
     properties: {
       tokenSecretRef: {
         type: "string",
+        format: "secret-ref",
         title: "Telegram bot token secret reference",
         description: "Secret reference containing the bot token. Store only the reference, never the token value.",
       },
