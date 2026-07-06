@@ -10,6 +10,7 @@ import {
 
 interface TelegramConnectorConfig {
   tokenSecretRef?: string;
+  companyId?: string;
   allowedChatId?: string;
   assigneeAgentId?: string;
   projectId?: string;
@@ -96,11 +97,23 @@ async function getConfig(ctx: PluginContext): Promise<Required<Pick<TelegramConn
   const raw = asObject(await ctx.config.get());
   return {
     tokenSecretRef: stringValue(raw.tokenSecretRef),
+    companyId: stringValue(raw.companyId),
     allowedChatId: stringValue(raw.allowedChatId),
     assigneeAgentId: stringValue(raw.assigneeAgentId),
     projectId: stringValue(raw.projectId),
-    timeoutSeconds: Math.max(0, Math.min(50, numberValue(raw.timeoutSeconds) ?? 50)),
+    timeoutSeconds: Math.max(0, Math.min(45, numberValue(raw.timeoutSeconds) ?? 45)),
   };
+}
+
+async function resolvePollingCompanyId(ctx: PluginContext, configuredCompanyId?: string): Promise<string> {
+  if (configuredCompanyId) return configuredCompanyId;
+
+  const companies = await ctx.companies.list({ limit: 2, offset: 0 });
+  if (companies.length === 1) return companies[0]!.id;
+  if (companies.length === 0) {
+    throw new Error("Telegram connector requires one Paperclip company or an explicit companyId in plugin config");
+  }
+  throw new Error("Telegram connector uses one global Telegram getUpdates cursor; set companyId when more than one company exists");
 }
 
 async function resolveAssigneeAgentId(
@@ -109,8 +122,19 @@ async function resolveAssigneeAgentId(
   configuredAssigneeAgentId?: string,
 ): Promise<string | undefined> {
   if (configuredAssigneeAgentId) return configuredAssigneeAgentId;
-  const agents = await ctx.agents.list({ companyId, status: "idle", limit: 100, offset: 0 });
+  const agents = await ctx.agents.list({ companyId, limit: 100, offset: 0 });
   return agents.find((agent: Agent) => agent.role === "ceo" || agent.name.toLowerCase() === "ceo")?.id;
+}
+
+async function deleteWebhook(ctx: PluginContext, token: string): Promise<void> {
+  const params = new URLSearchParams({ drop_pending_updates: "false" });
+  const response = await ctx.http.fetch(`https://api.telegram.org/bot${token}/deleteWebhook?${params.toString()}`, {
+    method: "POST",
+  });
+  const payload = await response.json() as TelegramApiResponse<boolean>;
+  if (!response.ok || !payload.ok) {
+    throw new Error(`Telegram deleteWebhook failed: ${payload.description ?? response.statusText}`);
+  }
 }
 
 async function fetchUpdates(
@@ -209,8 +233,31 @@ export async function pollTelegramInbound(ctx: PluginContext, companyId: string)
       skipped += 1;
       continue;
     }
+    const existingIssues = await ctx.issues.list({
+      companyId,
+      originKind: ORIGIN_KIND,
+      originId: String(update.update_id),
+      limit: 1,
+      offset: 0,
+    });
+    if (existingIssues.length > 0) {
+      await ctx.state.set(stateKey(companyId, processedKey), {
+        issueId: existingIssues[0]!.id,
+        processedAt: new Date().toISOString(),
+        recoveredFromExistingIssue: true,
+      });
+      skipped += 1;
+      continue;
+    }
 
-    const issue = await createInboundIssue(ctx, companyId, update, message, config, assigneeAgentId);
+    await ctx.state.set(stateKey(companyId, processedKey), { status: "creating", claimedAt: new Date().toISOString() });
+    let issue: Issue;
+    try {
+      issue = await createInboundIssue(ctx, companyId, update, message, config, assigneeAgentId);
+    } catch (error) {
+      await ctx.state.delete(stateKey(companyId, processedKey));
+      throw error;
+    }
     await ctx.state.set(stateKey(companyId, processedKey), { issueId: issue.id, processedAt: new Date().toISOString() });
     await ctx.activity.log({
       companyId,
@@ -237,12 +284,17 @@ export async function pollTelegramInbound(ctx: PluginContext, companyId: string)
 
 const plugin = definePlugin({
   async setup(ctx) {
+    const config = await getConfig(ctx);
+    if (!config.tokenSecretRef) {
+      throw new Error("Telegram connector requires tokenSecretRef in plugin config");
+    }
+    const token = await ctx.secrets.resolve(config.tokenSecretRef);
+    await deleteWebhook(ctx, token);
+
     ctx.jobs.register(INBOUND_JOB_KEY, async (job: PluginJobContext) => {
-      const companies = await ctx.companies.list({ limit: 100, offset: 0 });
-      for (const company of companies) {
-        const result = await pollTelegramInbound(ctx, company.id);
-        ctx.logger.info("Telegram inbound poll completed", { companyId: company.id, ...result });
-      }
+      const companyId = await resolvePollingCompanyId(ctx, config.companyId);
+      const result = await pollTelegramInbound(ctx, companyId);
+      ctx.logger.info("Telegram inbound poll completed", { companyId, runId: job.runId, ...result });
     });
 
     ctx.data.register("health", async (params) => {
@@ -251,6 +303,7 @@ const plugin = definePlugin({
       const nextOffset = companyId ? await ctx.state.get(stateKey(companyId, OFFSET_STATE_KEY)) : null;
       return {
         configured: Boolean(config.tokenSecretRef),
+        companyId: config.companyId ?? null,
         allowedChatId: config.allowedChatId ?? null,
         projectId: config.projectId ?? null,
         assigneeAgentId: config.assigneeAgentId ?? null,

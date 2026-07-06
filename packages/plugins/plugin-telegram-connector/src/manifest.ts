@@ -33,6 +33,12 @@ const manifest: PaperclipPluginManifestV1 = {
         title: "Telegram bot token secret reference",
         description: "Secret reference containing the bot token. Store only the reference, never the token value.",
       },
+      companyId: {
+        type: "string",
+        title: "Paperclip company ID",
+        description:
+          "Company that owns the Telegram getUpdates cursor. Required when the Paperclip instance has more than one company.",
+      },
       allowedChatId: {
         type: "string",
         title: "Allowed Telegram chat ID",
@@ -51,9 +57,9 @@ const manifest: PaperclipPluginManifestV1 = {
       timeoutSeconds: {
         type: "number",
         title: "Long-poll timeout seconds",
-        default: 50,
+        default: 45,
         minimum: 0,
-        maximum: 50,
+        maximum: 45,
       },
     },
     required: ["tokenSecretRef"],

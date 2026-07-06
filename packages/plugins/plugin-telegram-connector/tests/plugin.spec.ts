@@ -3,13 +3,13 @@ import type { Agent, Company } from "@paperclipai/plugin-sdk";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import manifest from "../src/manifest.js";
 import plugin, { pollTelegramInbound } from "../src/worker.js";
-import { INBOUND_JOB_KEY, OFFSET_STATE_KEY, ORIGIN_KIND, STATE_NAMESPACE } from "../src/constants.js";
+import { INBOUND_JOB_KEY, OFFSET_STATE_KEY, ORIGIN_KIND, PROCESSED_UPDATE_PREFIX, STATE_NAMESPACE } from "../src/constants.js";
 
 function companyStateKey(companyId: string, stateKey: string) {
   return { scopeKind: "company" as const, scopeId: companyId, namespace: STATE_NAMESPACE, stateKey };
 }
 
-function ceoAgent(): Agent {
+function ceoAgent(input?: { status?: Agent["status"] }): Agent {
   const now = new Date();
   return {
     id: "ceo-agent",
@@ -19,7 +19,7 @@ function ceoAgent(): Agent {
     role: "ceo",
     title: "CEO",
     icon: null,
-    status: "idle",
+    status: input?.status ?? "idle",
     reportsTo: null,
     capabilities: null,
     adapterType: "claude_local",
@@ -37,16 +37,16 @@ function ceoAgent(): Agent {
   };
 }
 
-function company(): Company {
+function company(input?: { id?: string; name?: string; issuePrefix?: string }): Company {
   const now = new Date();
   return {
-    id: "company-1",
-    name: "Acme",
+    id: input?.id ?? "company-1",
+    name: input?.name ?? "Acme",
     description: null,
     status: "active",
     pauseReason: null,
     pausedAt: null,
-    issuePrefix: "ACME",
+    issuePrefix: input?.issuePrefix ?? "ACME",
     issueCounter: 0,
     budgetMonthlyCents: 0,
     spentMonthlyCents: 0,
@@ -79,6 +79,12 @@ describe("telegram connector plugin", () => {
       jobKey: INBOUND_JOB_KEY,
       schedule: "* * * * *",
     }));
+    const configProperties = (manifest.instanceConfigSchema as { properties: Record<string, unknown> }).properties;
+    expect(configProperties.timeoutSeconds).toMatchObject({
+      default: 45,
+      maximum: 45,
+    });
+    expect(configProperties).toHaveProperty("companyId");
   });
 
   it("routes allowed Telegram messages into assigned Paperclip issues exactly once", async () => {
@@ -90,6 +96,7 @@ describe("telegram connector plugin", () => {
       projectId: "project-1",
       timeoutSeconds: 1,
     });
+
     harness.seed({ agents: [ceoAgent()] });
 
     const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () =>
@@ -137,6 +144,72 @@ describe("telegram connector plugin", () => {
     expect(harness.getState(companyStateKey("company-1", OFFSET_STATE_KEY))).toBe(102);
   });
 
+  it("resolves the CEO assignee regardless of current status", async () => {
+    const harness = createTestHarness({ manifest });
+    harness.setConfig({
+      tokenSecretRef: "TELEGRAM_BOT_TOKEN",
+      allowedChatId: "7230170718",
+      timeoutSeconds: 1,
+    });
+    harness.seed({ agents: [ceoAgent({ status: "running" })] });
+    harness.ctx.http.fetch = async () =>
+      new Response(JSON.stringify({
+        ok: true,
+        result: [{
+          update_id: 111,
+          message: {
+            message_id: 56,
+            chat: { id: 7_230_170_718, type: "private" },
+            from: { id: 1, first_name: "Mike" },
+            text: "CEO should still hear this",
+          },
+        }],
+      }), { status: 200 });
+    harness.ctx.secrets.resolve = async () => "token";
+
+    await pollTelegramInbound(harness.ctx, "company-1");
+
+    const issues = await harness.ctx.issues.list({ companyId: "company-1", originKind: ORIGIN_KIND });
+    expect(issues[0]?.assigneeAgentId).toBe("ceo-agent");
+  });
+
+  it("uses existing origin issue as the idempotency guard when processed state is missing", async () => {
+    const harness = createTestHarness({ manifest });
+    harness.setConfig({
+      tokenSecretRef: "TELEGRAM_BOT_TOKEN",
+      allowedChatId: "7230170718",
+      assigneeAgentId: "ceo-agent",
+      timeoutSeconds: 1,
+    });
+    harness.seed({ agents: [ceoAgent()] });
+    harness.ctx.http.fetch = async () =>
+      new Response(JSON.stringify({
+        ok: true,
+        result: [{
+          update_id: 121,
+          message: {
+            message_id: 57,
+            chat: { id: 7_230_170_718, type: "private" },
+            text: "Create once only",
+          },
+        }],
+      }), { status: 200 });
+    harness.ctx.secrets.resolve = async () => "token";
+
+    const first = await pollTelegramInbound(harness.ctx, "company-1");
+    await harness.ctx.state.delete(companyStateKey("company-1", `${PROCESSED_UPDATE_PREFIX}121`));
+    const second = await pollTelegramInbound(harness.ctx, "company-1");
+
+    expect(first).toMatchObject({ routed: 1, skipped: 0 });
+    expect(second).toMatchObject({ routed: 0, skipped: 1 });
+    const issues = await harness.ctx.issues.list({ companyId: "company-1", originKind: ORIGIN_KIND });
+    expect(issues).toHaveLength(1);
+    expect(harness.getState(companyStateKey("company-1", `${PROCESSED_UPDATE_PREFIX}121`))).toMatchObject({
+      issueId: issues[0]?.id,
+      recoveredFromExistingIssue: true,
+    });
+  });
+
   it("acknowledges but skips messages from non-allowlisted chats", async () => {
     const harness = createTestHarness({ manifest });
     harness.setConfig({
@@ -168,8 +241,33 @@ describe("telegram connector plugin", () => {
     const harness = createTestHarness({ manifest });
     harness.setConfig({ tokenSecretRef: "TELEGRAM_BOT_TOKEN" });
     harness.seed({ companies: [company()] });
-    harness.ctx.http.fetch = async () => new Response(JSON.stringify({ ok: true, result: [] }), { status: 200 });
+    harness.ctx.secrets.resolve = async () => "token";
+    const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async (url) =>
+      new Response(JSON.stringify(
+        String(url).includes("deleteWebhook") ? { ok: true, result: true } : { ok: true, result: [] },
+      ), { status: 200 })
+    );
+    harness.ctx.http.fetch = fetchMock;
     await plugin.definition.setup(harness.ctx);
     await expect(harness.runJob(INBOUND_JOB_KEY)).resolves.toBeUndefined();
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("deleteWebhook?");
+    expect(fetchMock.mock.calls[1]?.[0]).toContain("getUpdates?");
+  });
+
+  it("fails closed when a bot token would poll multiple companies without configured companyId", async () => {
+    const harness = createTestHarness({ manifest });
+    harness.setConfig({ tokenSecretRef: "TELEGRAM_BOT_TOKEN" });
+    harness.seed({
+      companies: [
+        company({ id: "company-1", issuePrefix: "ACME" }),
+        company({ id: "company-2", name: "Beta", issuePrefix: "BETA" }),
+      ],
+    });
+    harness.ctx.secrets.resolve = async () => "token";
+    harness.ctx.http.fetch = async () => new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
+
+    await plugin.definition.setup(harness.ctx);
+
+    await expect(harness.runJob(INBOUND_JOB_KEY)).rejects.toThrow("set companyId");
   });
 });
