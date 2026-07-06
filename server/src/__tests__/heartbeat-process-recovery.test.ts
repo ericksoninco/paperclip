@@ -32,6 +32,7 @@ import {
   issueTreeHolds,
   issueWorkProducts,
   issues,
+  projects,
   workspaceOperations,
 } from "@paperclipai/db";
 import {
@@ -383,6 +384,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       await db.delete(companySkills);
       await db.delete(workspaceOperations);
       await db.delete(executionWorkspaces);
+      await db.delete(projects);
       await db.delete(issuePlanDecompositions);
       await db.delete(issueThreadInteractions);
       await db.delete(documentAnnotationComments);
@@ -1306,6 +1308,31 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
 
     const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
     expect(comments).toHaveLength(0);
+  });
+
+  it("does not mark the agent error when adapter launch throws before returning a result", async () => {
+    mockAdapterExecute.mockRejectedValueOnce(new Error("fatal: not a git repository"));
+    const { agentId, runId } = await seedQueuedIssueRunFixture();
+    const heartbeat = heartbeatService(db);
+
+    await heartbeat.resumeQueuedRuns();
+    await waitForRunToSettle(heartbeat, runId, 5_000);
+    await waitForHeartbeatIdle(db, 5_000);
+
+    const run = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0] ?? null);
+    expect(run?.status).toBe("failed");
+    expect(run?.errorCode).toBe("adapter_failed");
+
+    const agent = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .then((rows) => rows[0] ?? null);
+    expect(agent?.status).not.toBe("error");
   });
 
   it("queues one finish-handoff wake when a successful run leaves in-progress work without a next action", async () => {
@@ -3057,6 +3084,75 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
 
     const wakeups = await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, agentId));
     expect(wakeups).toHaveLength(1);
+  });
+
+  it("routes repeated broken shared reuse_existing git worktree failures to a fresh isolated workspace", async () => {
+    const { companyId, agentId, issueId, runId } = await seedStrandedIssueFixture({
+      status: "in_progress",
+      runStatus: "failed",
+      runErrorCode: "adapter_failed",
+      runError: "fatal: not a git repository (or any of the parent directories): .git",
+    });
+    const executionWorkspaceId = randomUUID();
+    const projectId = randomUUID();
+    await db.insert(projects).values({
+      id: projectId,
+      companyId,
+      name: "Runtime",
+      status: "active",
+    });
+    await db.insert(executionWorkspaces).values({
+      id: executionWorkspaceId,
+      companyId,
+      projectId,
+      mode: "shared_workspace",
+      strategyType: "git_worktree",
+      name: "shared broken worktree",
+      status: "active",
+      cwd: "/tmp/paperclip-broken-shared-worktree",
+      providerType: "git_worktree",
+      providerRef: "/tmp/paperclip-broken-shared-worktree",
+      branchName: "PAP-1301-shared-reuse",
+      baseRef: "HEAD",
+      metadata: { createdByRuntime: true },
+    });
+    await db
+      .update(issues)
+      .set({
+        projectId,
+        executionWorkspaceId,
+        executionWorkspacePreference: "reuse_existing",
+        executionWorkspaceSettings: {
+          mode: "shared_workspace",
+          reuseExistingExecutionWorkspaceId: executionWorkspaceId,
+        },
+      })
+      .where(eq(issues.id, issueId));
+    const heartbeat = heartbeatService(db);
+
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+
+    expect(result.continuationRequeued).toBe(1);
+    expect(result.issueIds).toEqual([issueId]);
+    const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(issue?.executionWorkspaceId).toBeNull();
+    expect(issue?.executionWorkspacePreference).toBeNull();
+    expect(issue?.executionWorkspaceSettings).toMatchObject({
+      mode: "isolated_workspace",
+      reuseExistingExecutionWorkspaceId: executionWorkspaceId,
+    });
+
+    const runs = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(and(eq(heartbeatRuns.companyId, companyId), eq(heartbeatRuns.agentId, agentId)));
+    const retryRun = runs.find((row) => row.id !== runId);
+    expect(retryRun?.contextSnapshot).toMatchObject({
+      issueId,
+      taskId: issueId,
+      retryReason: "issue_continuation_needed",
+      retryOfRunId: runId,
+    });
   });
 
   it("re-enqueues recovery when the latest in-progress continuation made progress but left no live path", async () => {
