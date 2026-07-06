@@ -13,6 +13,7 @@ import {
   createDb,
   executionWorkspaces,
   heartbeatRuns,
+  issues,
   projectWorkspaces,
   projects,
   workspaceRuntimeServices,
@@ -3025,12 +3026,110 @@ describeEmbeddedPostgres("workspace runtime startup reconciliation", () => {
 
   afterEach(async () => {
     await db.delete(workspaceRuntimeServices);
+    await db.delete(issues);
     await db.delete(executionWorkspaces);
     await db.delete(projectWorkspaces);
     await db.delete(projects);
     await db.delete(heartbeatRuns);
     await db.delete(agents);
     await db.delete(companies);
+  });
+
+  it("does not remove a persisted git worktree while non-terminal issues still reference it", async () => {
+    const repoRoot = await createTempRepo();
+    const companyId = randomUUID();
+    const projectId = randomUUID();
+    const executionWorkspaceId = randomUUID();
+    const issueId = randomUUID();
+
+    const realized = await realizeExecutionWorkspace({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId,
+        workspaceId: null,
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+        },
+      },
+      issue: {
+        id: issueId,
+        identifier: "PAP-1301",
+        title: "shared cleanup guard",
+      },
+      agent: {
+        id: null,
+        name: "Engineer",
+        companyId,
+      },
+    });
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(projects).values({
+      id: projectId,
+      companyId,
+      name: "Runtime",
+      status: "active",
+    });
+    await db.insert(executionWorkspaces).values({
+      id: executionWorkspaceId,
+      companyId,
+      projectId,
+      mode: "shared_workspace",
+      strategyType: "git_worktree",
+      name: "shared-runtime",
+      status: "active",
+      cwd: realized.cwd,
+      providerType: "git_worktree",
+      providerRef: realized.worktreePath,
+      branchName: realized.branchName,
+      baseRef: realized.repoRef,
+      metadata: { createdByRuntime: true },
+    });
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      projectId,
+      title: "Still running on shared workspace",
+      status: "in_progress",
+      priority: "high",
+      executionWorkspaceId,
+      executionWorkspacePreference: "reuse_existing",
+    });
+
+    const result = await cleanupExecutionWorkspaceArtifacts({
+      db,
+      companyId,
+      workspace: {
+        id: executionWorkspaceId,
+        cwd: realized.cwd,
+        providerType: "git_worktree",
+        providerRef: realized.worktreePath,
+        branchName: realized.branchName,
+        repoUrl: realized.repoUrl,
+        baseRef: realized.repoRef,
+        projectId,
+        projectWorkspaceId: null,
+        sourceIssueId: issueId,
+        metadata: { createdByRuntime: true },
+      },
+    });
+
+    expect(result.cleaned).toBe(false);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("non-terminal issue(s) still reference execution workspace"),
+    ]);
+    await expect(fs.stat(realized.cwd)).resolves.toBeTruthy();
   });
 
   it("adopts a live auto-port shared service after runtime state is reset", async () => {

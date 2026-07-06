@@ -7526,6 +7526,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       if (executionWorkspace.created) {
         try {
           await cleanupExecutionWorkspaceArtifacts({
+            db,
+            companyId: agent.companyId,
             workspace: {
               id: existingExecutionWorkspace?.id ?? `transient-${run.id}`,
               cwd: executionWorkspace.cwd,
@@ -8031,6 +8033,36 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
       let adapterResult: Awaited<ReturnType<typeof adapter.execute>>;
       try {
+        if (executionWorkspace.strategy === "git_worktree" && persistedExecutionWorkspace) {
+          await ensurePersistedExecutionWorkspaceAvailable({
+            base: executionWorkspaceBase,
+            workspace: {
+              mode: persistedExecutionWorkspace.mode,
+              strategyType: persistedExecutionWorkspace.strategyType,
+              cwd: persistedExecutionWorkspace.cwd,
+              providerRef: persistedExecutionWorkspace.providerRef,
+              projectId: persistedExecutionWorkspace.projectId,
+              projectWorkspaceId: persistedExecutionWorkspace.projectWorkspaceId,
+              repoUrl: persistedExecutionWorkspace.repoUrl,
+              baseRef: persistedExecutionWorkspace.baseRef,
+              branchName: persistedExecutionWorkspace.branchName,
+              metadata: persistedExecutionWorkspace.metadata as Record<string, unknown> | null,
+              config: {
+                provisionCommand:
+                  persistedExecutionWorkspace.config?.provisionCommand
+                  ?? projectExecutionWorkspacePolicy?.workspaceStrategy?.provisionCommand
+                  ?? null,
+              },
+            },
+            issue: issueRef,
+            agent: {
+              id: agent.id,
+              name: agent.name,
+              companyId: agent.companyId,
+            },
+            recorder: workspaceOperationRecorder,
+          });
+        }
         adapterResult = await adapter.execute({
           runId: run.id,
           agent,
