@@ -2297,7 +2297,13 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       .where(and(eq(executionWorkspaces.companyId, issue.companyId), eq(executionWorkspaces.id, issue.executionWorkspaceId)))
       .limit(1)
       .then((rows) => rows[0] ?? null);
-    return workspace?.mode === "shared_workspace" && workspace.strategyType === "git_worktree";
+    // A reused git worktree can be torn down out from under any issue that
+    // inherits it (shared_workspace OR isolated_workspace reused via
+    // `reuse_existing`), leaving a `.git`-less directory that fails the adapter
+    // with "not a git repository". The remedy — force a fresh isolated
+    // workspace — is identical regardless of the persisted `mode`, so gate on
+    // the strategy alone rather than only `shared_workspace`.
+    return workspace?.strategyType === "git_worktree";
   }
 
   async function forceFreshIsolatedWorkspaceForRecovery(issue: typeof issues.$inferSelect) {
@@ -2528,6 +2534,14 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       }
 
       const latestRun = await getLatestIssueRun(issue.companyId, issue.id);
+      // Detect once whether the latest failure is a torn-down reused git
+      // worktree ("not a git repository"). When true, every recovery path must
+      // reroute to a fresh isolated workspace before requeueing, otherwise the
+      // retry (or a review/QA child that inherited the same workspace) hits the
+      // same `.git`-less directory and dead-blocks. See EDD-1300 / EDD-1311.
+      const brokenGitReuse =
+        isUnsuccessfulTerminalIssueRun(latestRun) &&
+        (await shouldForceFreshWorkspaceForBrokenGitReuse(issue, latestRun));
       if (isStrandedIssueRecoveryIssue(issue) && isUnsuccessfulTerminalIssueRun(latestRun)) {
         const updated = await escalateStrandedRecoveryIssueInPlace({
           issue,
@@ -2593,6 +2607,10 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         if (await isInvocationBudgetBlocked(issue, agentId)) {
           result.skipped += 1;
           continue;
+        }
+
+        if (brokenGitReuse) {
+          await forceFreshIsolatedWorkspaceForRecovery(issue);
         }
 
         const queued = await enqueueStrandedIssueRecovery({
@@ -2687,6 +2705,35 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         continue;
       }
       if (isUnsuccessfulTerminalIssueRun(latestRun)) {
+        // Reroute a torn-down reused git worktree to a fresh isolated workspace
+        // and requeue once, before any escalate-to-`blocked` classification.
+        // This covers in_progress continuation, review, and QA issues that
+        // inherited a `.git`-less workspace (EDD-1311). Bounded: once
+        // `forceFreshIsolatedWorkspaceForRecovery` clears the workspace,
+        // `brokenGitReuse` is false on the next sweep, so a still-failing run
+        // falls through to the normal non-retryable / max-attempts escalation.
+        if (brokenGitReuse) {
+          if (await isInvocationBudgetBlocked(issue, agentId)) {
+            result.skipped += 1;
+            continue;
+          }
+          await forceFreshIsolatedWorkspaceForRecovery(issue);
+          const queued = await enqueueStrandedIssueRecovery({
+            issueId: issue.id,
+            agentId,
+            reason: "issue_continuation_needed",
+            retryReason: "issue_continuation_needed",
+            source: "issue.continuation_recovery",
+            retryOfRunId: latestRun?.id ?? issue.checkoutRunId ?? null,
+          });
+          if (queued) {
+            result.continuationRequeued += 1;
+            result.issueIds.push(issue.id);
+          } else {
+            result.skipped += 1;
+          }
+          continue;
+        }
         const classification = classifyContinuationFailure(latestRun);
 
         if (classification.kind === "non_retryable") {
@@ -2756,10 +2803,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         continue;
       }
 
-      const forceFreshWorkspace = isUnsuccessfulTerminalIssueRun(latestRun)
-        ? await shouldForceFreshWorkspaceForBrokenGitReuse(issue, latestRun)
-        : false;
-      if (forceFreshWorkspace) {
+      if (brokenGitReuse) {
         await forceFreshIsolatedWorkspaceForRecovery(issue);
       }
 
