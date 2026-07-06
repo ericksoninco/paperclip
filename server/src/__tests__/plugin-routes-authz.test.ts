@@ -1,6 +1,17 @@
+import { randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { eq } from "drizzle-orm";
+import {
+  companies,
+  companySecretBindings,
+  companySecretVersions,
+  companySecrets,
+  createDb,
+} from "@paperclipai/db";
+import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
+import { secretService } from "../services/secrets.js";
 
 const mockRegistry = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -132,6 +143,17 @@ function readyPlugin() {
     version: "1.0.0",
     status: "ready",
   });
+}
+
+const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
+const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
+
+if (!embeddedPostgresSupport.supported) {
+  console.warn(
+    `Skipping plugin config secret-ref integration tests on this host: ${
+      embeddedPostgresSupport.reason ?? "unsupported environment"
+    }`,
+  );
 }
 
 describe.sequential("plugin install and upgrade authz", () => {
@@ -307,30 +329,6 @@ describe.sequential("plugin install and upgrade authz", () => {
     expect(mockLifecycle.unload).toHaveBeenCalledWith(pluginId, true);
   }, 20_000);
 
-  it("rejects plugin config saves that contain secret refs even for instance admins", async () => {
-    readyPlugin();
-
-    const { app } = await createApp({
-      type: "board",
-      userId: "admin-1",
-      source: "session",
-      isInstanceAdmin: true,
-      companyIds: [companyA],
-    });
-
-    const res = await request(app)
-      .post(`/api/plugins/${pluginId}/config`)
-      .send({
-        configJson: {
-          apiKeyRef: "77777777-7777-4777-8777-777777777777",
-        },
-      });
-
-    expect(res.status).toBe(422);
-    expect(res.body.error).toMatch(/secret references are disabled/i);
-    expect(mockRegistry.upsertConfig).not.toHaveBeenCalled();
-  }, 20_000);
-
   it("allows instance admins to upgrade plugins", async () => {
     const pluginId = "11111111-1111-4111-8111-111111111111";
     mockRegistry.getById.mockResolvedValue({
@@ -357,6 +355,144 @@ describe.sequential("plugin install and upgrade authz", () => {
 
     expect(res.status).toBe(200);
     expect(mockLifecycle.upgrade).toHaveBeenCalledWith(pluginId, "1.1.0");
+  }, 20_000);
+});
+
+describeEmbeddedPostgres("plugin config secret refs", () => {
+  let stopDb: (() => Promise<void>) | null = null;
+  let db!: ReturnType<typeof createDb>;
+
+  beforeAll(async () => {
+    const started = await startEmbeddedPostgresTestDatabase("plugin-config-secret-refs");
+    stopDb = started.cleanup;
+    db = createDb(started.connectionString);
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    await db.delete(companySecretBindings);
+    await db.delete(companySecretVersions);
+    await db.delete(companySecrets);
+    await db.delete(companies);
+  });
+
+  afterAll(async () => {
+    await stopDb?.();
+  });
+
+  async function seedCompany(id: string, name: string) {
+    await db.insert(companies).values({
+      id,
+      name,
+      issuePrefix: `T${id.slice(0, 7)}`.toUpperCase(),
+      status: "active",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+  }
+
+  function readyPluginWithSecretRefSchema() {
+    const plugin = {
+      id: pluginId,
+      pluginKey: "paperclip.telegram",
+      version: "1.0.0",
+      status: "ready",
+      manifestJson: {
+        id: "paperclip.telegram",
+        instanceConfigSchema: {
+          type: "object",
+          properties: {
+            tokenSecretRef: { type: "string", format: "secret-ref" },
+          },
+          required: ["tokenSecretRef"],
+        },
+      },
+    };
+    mockRegistry.getById.mockResolvedValue(plugin);
+    mockRegistry.upsertConfig.mockImplementation(async (_id, input) => ({
+      id: randomUUID(),
+      pluginId,
+      ...input,
+    }));
+  }
+
+  it("accepts a valid tokenSecretRef and creates a company-scoped plugin binding", async () => {
+    await seedCompany(companyA, "Company A");
+    readyPluginWithSecretRefSchema();
+    const secret = await secretService(db).create(companyA, {
+      name: `telegram-token-${randomUUID()}`,
+      provider: "local_encrypted",
+      value: "bot-token",
+    });
+    const { app } = await createApp(
+      {
+        type: "board",
+        userId: "admin-1",
+        source: "session",
+        isInstanceAdmin: true,
+        companyIds: [companyA],
+      },
+      {},
+      { db },
+    );
+
+    const res = await request(app)
+      .post(`/api/plugins/${pluginId}/config`)
+      .send({ configJson: { tokenSecretRef: secret.id } });
+
+    expect(res.status).toBe(200);
+    expect(mockRegistry.upsertConfig).toHaveBeenCalledWith(pluginId, {
+      configJson: { tokenSecretRef: secret.id },
+    });
+    const bindings = await db
+      .select()
+      .from(companySecretBindings)
+      .where(eq(companySecretBindings.targetId, pluginId));
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]).toMatchObject({
+      companyId: companyA,
+      secretId: secret.id,
+      targetType: "plugin",
+      targetId: pluginId,
+      configPath: "tokenSecretRef",
+      versionSelector: "latest",
+      required: true,
+    });
+  }, 20_000);
+
+  it("rejects a tokenSecretRef whose company the acting admin cannot access", async () => {
+    await seedCompany(companyA, "Company A");
+    await seedCompany(companyB, "Company B");
+    readyPluginWithSecretRefSchema();
+    const secret = await secretService(db).create(companyB, {
+      name: `foreign-telegram-token-${randomUUID()}`,
+      provider: "local_encrypted",
+      value: "foreign-bot-token",
+    });
+    const { app } = await createApp(
+      {
+        type: "board",
+        userId: "admin-1",
+        source: "session",
+        isInstanceAdmin: true,
+        companyIds: [companyA],
+      },
+      {},
+      { db },
+    );
+
+    const res = await request(app)
+      .post(`/api/plugins/${pluginId}/config`)
+      .send({ configJson: { tokenSecretRef: secret.id } });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/not authorized/i);
+    expect(mockRegistry.upsertConfig).not.toHaveBeenCalled();
+    const bindings = await db.select().from(companySecretBindings);
+    expect(bindings).toHaveLength(0);
   }, 20_000);
 });
 

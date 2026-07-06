@@ -53,6 +53,7 @@ import { createPluginToolDispatcher } from "./services/plugin-tool-dispatcher.js
 import { pluginLifecycleManager } from "./services/plugin-lifecycle.js";
 import { createPluginJobCoordinator } from "./services/plugin-job-coordinator.js";
 import { buildHostServices, flushPluginLogBuffer } from "./services/plugin-host-services.js";
+import { secretService } from "./services/secrets.js";
 import { createPluginEventBus } from "./services/plugin-event-bus.js";
 import { setPluginEventBus } from "./services/activity-log.js";
 import { createPluginDevWatcher } from "./services/plugin-dev-watcher.js";
@@ -285,6 +286,7 @@ export async function createApp(
         const services = buildHostServices(db, pluginId, manifest.id, eventBus, notifyWorker, {
           pluginWorkerManager: workerManager,
           manifest,
+          secretService: secretService(db),
         });
         hostServicesDisposers.set(pluginId, () => services.dispose());
         return createHostClientHandlers({

@@ -29,6 +29,8 @@ import type { Db } from "@paperclipai/db";
 import {
   agents,
   companies,
+  companySecretBindings,
+  companySecrets,
   heartbeatRuns,
   pluginLogs,
   pluginWebhookDeliveries,
@@ -75,7 +77,6 @@ import {
 } from "../services/plugin-local-folders.js";
 import {
   extractSecretRefPathsFromConfig,
-  PLUGIN_SECRET_REFS_DISABLED_MESSAGE,
 } from "../services/plugin-secrets-handler.js";
 import { badRequest, forbidden, notFound, unauthorized, unprocessable } from "../errors.js";
 
@@ -2173,10 +2174,56 @@ export function pluginRoutes(
 
     try {
       const secretRefsByPath = extractSecretRefPathsFromConfig(body.configJson, schema);
-      if (secretRefsByPath.size > 0) {
-        res.status(422).json({ error: PLUGIN_SECRET_REFS_DISABLED_MESSAGE });
-        return;
+      const bindingValues: Array<{
+        companyId: string;
+        secretId: string;
+        targetType: "plugin";
+        targetId: string;
+        configPath: string;
+        versionSelector: "latest";
+        required: true;
+      }> = [];
+      for (const [secretId, configPaths] of secretRefsByPath.entries()) {
+        const secret = await db
+          .select({ id: companySecrets.id, companyId: companySecrets.companyId })
+          .from(companySecrets)
+          .where(eq(companySecrets.id, secretId))
+          .limit(1)
+          .then((rows) => rows[0] ?? null);
+        if (!secret) {
+          throw unprocessable("Secret reference is not resolvable");
+        }
+        try {
+          assertCompanyAccess(req, secret.companyId);
+        } catch {
+          throw unprocessable("Secret reference is not authorized for this company");
+        }
+        for (const configPath of configPaths) {
+          bindingValues.push({
+            companyId: secret.companyId,
+            secretId,
+            targetType: "plugin",
+            targetId: plugin.id,
+            configPath,
+            versionSelector: "latest",
+            required: true,
+          });
+        }
       }
+
+      await db.transaction(async (tx) => {
+        await tx
+          .delete(companySecretBindings)
+          .where(
+            and(
+              eq(companySecretBindings.targetType, "plugin"),
+              eq(companySecretBindings.targetId, plugin.id),
+            ),
+          );
+        if (bindingValues.length > 0) {
+          await tx.insert(companySecretBindings).values(bindingValues);
+        }
+      });
 
       const result = await registry.upsertConfig(plugin.id, {
         configJson: body.configJson,
@@ -2218,7 +2265,10 @@ export function pluginRoutes(
       res.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      res.status(400).json({ error: message });
+      const status = typeof (err as { status?: unknown }).status === "number"
+        ? (err as { status: number }).status
+        : 400;
+      res.status(status).json({ error: message });
     }
   });
 

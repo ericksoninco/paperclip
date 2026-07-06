@@ -34,11 +34,14 @@
  */
 
 import type { Db } from "@paperclipai/db";
+import { and, eq } from "drizzle-orm";
+import { companySecretBindings } from "@paperclipai/db";
 import {
   collectSecretRefPaths,
   isUuidSecretRef,
   readConfigValueAtPath,
 } from "./json-schema-secret-refs.js";
+import { secretService } from "./secrets.js";
 
 export const PLUGIN_SECRET_REFS_DISABLED_MESSAGE =
   "Plugin secret references are disabled until company-scoped plugin config lands";
@@ -133,6 +136,8 @@ export interface PluginSecretsResolveParams {
 export interface PluginSecretsHandlerOptions {
   /** Database connection. */
   db: Db;
+  /** Secret service used to resolve bound secret values. */
+  secretService?: Pick<ReturnType<typeof secretService>, "resolveSecretValue">;
   /**
    * The plugin ID using this handler.
    * Used for logging context only; never included in error payloads
@@ -200,6 +205,7 @@ export function createPluginSecretsHandler(
   options: PluginSecretsHandlerOptions,
 ): PluginSecretsService {
   const { pluginId } = options;
+  const secrets = options.secretService ?? secretService(options.db);
 
   // Rate limit: max 30 resolution attempts per plugin per minute
   const rateLimiter = createRateLimiter(30, 60_000);
@@ -230,9 +236,32 @@ export function createPluginSecretsHandler(
         throw invalidSecretRef(trimmedRef);
       }
 
-      // Fail closed until plugin config and worker runtime both carry an
-      // explicit company scope for secret bindings and resolution.
-      throw new Error(PLUGIN_SECRET_REFS_DISABLED_MESSAGE);
+      const bindings = await options.db
+        .select({
+          companyId: companySecretBindings.companyId,
+          configPath: companySecretBindings.configPath,
+        })
+        .from(companySecretBindings)
+        .where(
+          and(
+            eq(companySecretBindings.targetType, "plugin"),
+            eq(companySecretBindings.targetId, pluginId),
+            eq(companySecretBindings.secretId, trimmedRef),
+          ),
+        );
+
+      const companyIds = new Set(bindings.map((binding) => binding.companyId));
+      if (bindings.length === 0 || companyIds.size !== 1) {
+        throw new Error(PLUGIN_SECRET_REFS_DISABLED_MESSAGE);
+      }
+
+      const binding = bindings[0]!;
+      return secrets.resolveSecretValue(binding.companyId, trimmedRef, "latest", {
+        consumerType: "plugin",
+        consumerId: pluginId,
+        configPath: binding.configPath,
+        pluginId,
+      });
     },
   };
 }
