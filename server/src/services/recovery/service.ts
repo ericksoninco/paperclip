@@ -13,6 +13,7 @@ import {
   approvals,
   activityLog,
   companies,
+  executionWorkspaces,
   heartbeatRunEvents,
   heartbeatRunWatchdogDecisions,
   heartbeatRuns,
@@ -205,6 +206,12 @@ function classifyContinuationFailure(latestRun: LatestIssueRun): ContinuationRet
     baseBackoffMs: 0,
     errorCode,
   };
+}
+
+function isNotGitRepositoryAdapterFailure(latestRun: LatestIssueRun) {
+  const errorCode = readNonEmptyString(latestRun?.errorCode);
+  const error = readNonEmptyString(latestRun?.error)?.toLowerCase() ?? "";
+  return errorCode === "adapter_failed" && error.includes("not a git repository");
 }
 
 function successfulRunHandoffRecoveryEvidence(latestRun: LatestIssueRun): SuccessfulRunHandoffRecoveryEvidence | null {
@@ -2277,6 +2284,38 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       .then((rows) => rows.map((row) => row.blockerIssueId));
   }
 
+  async function shouldForceFreshWorkspaceForBrokenGitReuse(issue: typeof issues.$inferSelect, latestRun: LatestIssueRun) {
+    if (!isNotGitRepositoryAdapterFailure(latestRun)) return false;
+    if (issue.executionWorkspacePreference !== "reuse_existing" || !issue.executionWorkspaceId) return false;
+    const workspace = await db
+      .select({
+        id: executionWorkspaces.id,
+        mode: executionWorkspaces.mode,
+        strategyType: executionWorkspaces.strategyType,
+      })
+      .from(executionWorkspaces)
+      .where(and(eq(executionWorkspaces.companyId, issue.companyId), eq(executionWorkspaces.id, issue.executionWorkspaceId)))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    return workspace?.mode === "shared_workspace" && workspace.strategyType === "git_worktree";
+  }
+
+  async function forceFreshIsolatedWorkspaceForRecovery(issue: typeof issues.$inferSelect) {
+    const existingSettings = parseObject(issue.executionWorkspaceSettings);
+    await db
+      .update(issues)
+      .set({
+        executionWorkspaceId: null,
+        executionWorkspacePreference: null,
+        executionWorkspaceSettings: {
+          ...existingSettings,
+          mode: "isolated_workspace",
+        },
+        updatedAt: new Date(),
+      })
+      .where(and(eq(issues.companyId, issue.companyId), eq(issues.id, issue.id)));
+  }
+
   async function escalateStrandedAssignedIssue(input: {
     issue: typeof issues.$inferSelect;
     previousStatus: "todo" | "in_progress";
@@ -2715,6 +2754,13 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       if (await isInvocationBudgetBlocked(issue, agentId)) {
         result.skipped += 1;
         continue;
+      }
+
+      const forceFreshWorkspace = isUnsuccessfulTerminalIssueRun(latestRun)
+        ? await shouldForceFreshWorkspaceForBrokenGitReuse(issue, latestRun)
+        : false;
+      if (forceFreshWorkspace) {
+        await forceFreshIsolatedWorkspaceForRecovery(issue);
       }
 
       const queued = await enqueueStrandedIssueRecovery({

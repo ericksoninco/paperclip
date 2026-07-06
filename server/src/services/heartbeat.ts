@@ -6431,6 +6431,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   async function finalizeAgentStatus(
     agentId: string,
     outcome: "succeeded" | "failed" | "cancelled" | "timed_out",
+    opts?: { recoverableFailure?: boolean },
   ) {
     const existing = await getAgent(agentId);
     if (!existing) return;
@@ -6445,7 +6446,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const nextStatus =
       runningCount > 0
         ? "running"
-        : outcome === "succeeded" || outcome === "cancelled"
+        : outcome === "succeeded" || outcome === "cancelled" || opts?.recoverableFailure
           ? "idle"
           : "error";
 
@@ -7526,6 +7527,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       if (executionWorkspace.created) {
         try {
           await cleanupExecutionWorkspaceArtifacts({
+            db,
+            companyId: agent.companyId,
             workspace: {
               id: existingExecutionWorkspace?.id ?? `transient-${run.id}`,
               cwd: executionWorkspace.cwd,
@@ -8031,6 +8034,36 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
       let adapterResult: Awaited<ReturnType<typeof adapter.execute>>;
       try {
+        if (executionWorkspace.strategy === "git_worktree" && persistedExecutionWorkspace) {
+          await ensurePersistedExecutionWorkspaceAvailable({
+            base: executionWorkspaceBase,
+            workspace: {
+              mode: persistedExecutionWorkspace.mode,
+              strategyType: persistedExecutionWorkspace.strategyType,
+              cwd: persistedExecutionWorkspace.cwd,
+              providerRef: persistedExecutionWorkspace.providerRef,
+              projectId: persistedExecutionWorkspace.projectId,
+              projectWorkspaceId: persistedExecutionWorkspace.projectWorkspaceId,
+              repoUrl: persistedExecutionWorkspace.repoUrl,
+              baseRef: persistedExecutionWorkspace.baseRef,
+              branchName: persistedExecutionWorkspace.branchName,
+              metadata: persistedExecutionWorkspace.metadata as Record<string, unknown> | null,
+              config: {
+                provisionCommand:
+                  persistedExecutionWorkspace.config?.provisionCommand
+                  ?? projectExecutionWorkspacePolicy?.workspaceStrategy?.provisionCommand
+                  ?? null,
+              },
+            },
+            issue: issueRef,
+            agent: {
+              id: agent.id,
+              name: agent.name,
+              companyId: agent.companyId,
+            },
+            recorder: workspaceOperationRecorder,
+          });
+        }
         adapterResult = await adapter.execute({
           runId: run.id,
           agent,
@@ -8478,7 +8511,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         }
       }
 
-      await finalizeAgentStatus(agent.id, "failed");
+      await finalizeAgentStatus(agent.id, "failed", { recoverableFailure: true });
     }
     } catch (outerErr) {
           // Setup code before adapter.execute threw (e.g. ensureRuntimeState, resolveWorkspaceForRun).
@@ -8521,7 +8554,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           }
           // Ensure the agent is not left stuck in "running" if the inner catch handler's
           // DB calls threw (e.g. a transient DB error in finalizeAgentStatus).
-          await finalizeAgentStatus(run.agentId, "failed").catch(() => undefined);
+          await finalizeAgentStatus(run.agentId, "failed", { recoverableFailure: true }).catch(() => undefined);
         } finally {
           const latestRun = await getRun(run.id).catch(() => null);
           await releaseEnvironmentLeasesForRun({
