@@ -38,6 +38,8 @@ export function resolveShell(): string {
   return shell;
 }
 
+// Process-local serialization only: this prevents concurrent mutations from
+// this server process, while git remains the source of truth across processes.
 const worktreeLocksByPath = new Map<string, Promise<void>>();
 
 export async function acquireExecutionWorktreeLock(worktreePath: string): Promise<() => void> {
@@ -1634,69 +1636,73 @@ export async function cleanupExecutionWorkspaceArtifacts(input: {
   }
 
   if (input.workspace.providerType === "git_worktree" && workspacePath) {
-    const nonTerminalReferenceCount = await countNonTerminalIssueWorkspaceReferences({
-      db: input.db,
-      companyId: input.companyId,
-      executionWorkspaceId: input.workspace.id,
+    const cleanupResult = await withExecutionWorktreeLock(workspacePath, async () => {
+      const nonTerminalReferenceCount = await countNonTerminalIssueWorkspaceReferences({
+        db: input.db,
+        companyId: input.companyId,
+        executionWorkspaceId: input.workspace.id,
+      });
+      if (nonTerminalReferenceCount > 0) {
+        warnings.push(
+          `Skipped git worktree cleanup for "${workspacePath}" because ${nonTerminalReferenceCount} non-terminal issue(s) still reference execution workspace ${input.workspace.id}.`,
+        );
+        return {
+          cleanedPath: workspacePath,
+          cleaned: false,
+          warnings,
+        };
+      }
+      const worktreeExists = await directoryExists(workspacePath);
+      if (worktreeExists) {
+        if (!repoRoot) {
+          warnings.push(`Could not resolve git repo root for "${workspacePath}".`);
+        } else {
+          try {
+            await recordGitOperation(input.recorder, {
+              phase: "worktree_cleanup",
+              args: ["worktree", "remove", "--force", workspacePath],
+              cwd: repoRoot,
+              metadata: {
+                workspaceId: input.workspace.id,
+                workspacePath,
+                branchName: input.workspace.branchName,
+                cleanupAction: "worktree_remove",
+              },
+              successMessage: `Removed git worktree ${workspacePath}\n`,
+              failureLabel: `git worktree remove ${workspacePath}`,
+            });
+          } catch (err) {
+            warnings.push(err instanceof Error ? err.message : String(err));
+          }
+        }
+      }
+      if (createdByRuntime && input.workspace.branchName) {
+        if (!repoRoot) {
+          warnings.push(`Could not resolve git repo root to delete branch "${input.workspace.branchName}".`);
+        } else {
+          try {
+            await recordGitOperation(input.recorder, {
+              phase: "worktree_cleanup",
+              args: ["branch", "-d", input.workspace.branchName],
+              cwd: repoRoot,
+              metadata: {
+                workspaceId: input.workspace.id,
+                workspacePath,
+                branchName: input.workspace.branchName,
+                cleanupAction: "branch_delete",
+              },
+              successMessage: `Deleted branch ${input.workspace.branchName}\n`,
+              failureLabel: `git branch -d ${input.workspace.branchName}`,
+            });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            warnings.push(`Skipped deleting branch "${input.workspace.branchName}": ${message}`);
+          }
+        }
+      }
+      return null;
     });
-    if (nonTerminalReferenceCount > 0) {
-      warnings.push(
-        `Skipped git worktree cleanup for "${workspacePath}" because ${nonTerminalReferenceCount} non-terminal issue(s) still reference execution workspace ${input.workspace.id}.`,
-      );
-      return {
-        cleanedPath: workspacePath,
-        cleaned: false,
-        warnings,
-      };
-    }
-    const worktreeExists = await directoryExists(workspacePath);
-    if (worktreeExists) {
-      if (!repoRoot) {
-        warnings.push(`Could not resolve git repo root for "${workspacePath}".`);
-      } else {
-        try {
-          await recordGitOperation(input.recorder, {
-            phase: "worktree_cleanup",
-            args: ["worktree", "remove", "--force", workspacePath],
-            cwd: repoRoot,
-            metadata: {
-              workspaceId: input.workspace.id,
-              workspacePath,
-              branchName: input.workspace.branchName,
-              cleanupAction: "worktree_remove",
-            },
-            successMessage: `Removed git worktree ${workspacePath}\n`,
-            failureLabel: `git worktree remove ${workspacePath}`,
-          });
-        } catch (err) {
-          warnings.push(err instanceof Error ? err.message : String(err));
-        }
-      }
-    }
-    if (createdByRuntime && input.workspace.branchName) {
-      if (!repoRoot) {
-        warnings.push(`Could not resolve git repo root to delete branch "${input.workspace.branchName}".`);
-      } else {
-        try {
-          await recordGitOperation(input.recorder, {
-            phase: "worktree_cleanup",
-            args: ["branch", "-d", input.workspace.branchName],
-            cwd: repoRoot,
-            metadata: {
-              workspaceId: input.workspace.id,
-              workspacePath,
-              branchName: input.workspace.branchName,
-              cleanupAction: "branch_delete",
-            },
-            successMessage: `Deleted branch ${input.workspace.branchName}\n`,
-            failureLabel: `git branch -d ${input.workspace.branchName}`,
-          });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          warnings.push(`Skipped deleting branch "${input.workspace.branchName}": ${message}`);
-        }
-      }
-    }
+    if (cleanupResult) return cleanupResult;
   } else if (input.workspace.providerType === "local_fs" && createdByRuntime && workspacePath) {
     const projectWorkspaceCwd = input.projectWorkspace?.cwd ? path.resolve(input.projectWorkspace.cwd) : null;
     const resolvedWorkspacePath = path.resolve(workspacePath);

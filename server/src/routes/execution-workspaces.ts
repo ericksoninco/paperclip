@@ -555,6 +555,8 @@ export function executionWorkspaceRoutes(db: Db) {
               .then((rows) => parseProjectExecutionWorkspacePolicy(rows[0]?.executionWorkspacePolicy))
           : null;
         const cleanupResult = await cleanupExecutionWorkspaceArtifacts({
+          db,
+          companyId: existing.companyId,
           workspace: existing,
           projectWorkspace,
           teardownCommand: configForCleanup?.teardownCommand ?? projectPolicy?.workspaceStrategy?.teardownCommand ?? null,

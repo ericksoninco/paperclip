@@ -2302,14 +2302,18 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
 
   async function forceFreshIsolatedWorkspaceForRecovery(issue: typeof issues.$inferSelect) {
     const existingSettings = parseObject(issue.executionWorkspaceSettings);
-    await issuesSvc.update(issue.id, {
-      executionWorkspaceId: null,
-      executionWorkspacePreference: null,
-      executionWorkspaceSettings: {
-        ...existingSettings,
-        mode: "isolated_workspace",
-      },
-    });
+    await db
+      .update(issues)
+      .set({
+        executionWorkspaceId: null,
+        executionWorkspacePreference: null,
+        executionWorkspaceSettings: {
+          ...existingSettings,
+          mode: "isolated_workspace",
+        },
+        updatedAt: new Date(),
+      })
+      .where(and(eq(issues.companyId, issue.companyId), eq(issues.id, issue.id)));
   }
 
   async function escalateStrandedAssignedIssue(input: {

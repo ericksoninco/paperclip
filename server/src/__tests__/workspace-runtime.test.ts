@@ -428,6 +428,52 @@ describe("realizeExecutionWorkspace", () => {
     expect(second.branchName).toBe(first.branchName);
   });
 
+  it("serializes concurrent realization of the same shared git worktree", async () => {
+    const repoRoot = await createTempRepo();
+    const input = {
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+        },
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-1301",
+        title: "Shared reuse worktree",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    } satisfies Parameters<typeof realizeExecutionWorkspace>[0];
+
+    const [first, second] = await Promise.all([
+      realizeExecutionWorkspace(input),
+      realizeExecutionWorkspace(input),
+    ]);
+
+    expect(first.cwd).toBe(second.cwd);
+    expect(first.branchName).toBe(second.branchName);
+    expect([first.created, second.created].filter(Boolean)).toHaveLength(1);
+    const topLevel = await readGit(first.cwd, ["rev-parse", "--show-toplevel"]);
+    expect(path.resolve(topLevel)).toBe(path.resolve(first.cwd));
+    const worktreeList = await readGit(repoRoot, ["worktree", "list", "--porcelain"]);
+    const occurrences = worktreeList
+      .split("\n")
+      .filter((line) => line === `worktree ${path.resolve(first.cwd)}`);
+    expect(occurrences).toHaveLength(1);
+  });
+
   it("warns when reusing a git worktree whose base ref has advanced", async () => {
     const repoRoot = await createTempRepo();
 
