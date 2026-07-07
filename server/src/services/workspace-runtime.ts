@@ -108,6 +108,17 @@ export interface RealizedExecutionWorkspace extends ExecutionWorkspaceInput {
   baseRefSha?: string | null;
 }
 
+export class RecoverableBranchlessGitWorktreeReuseError extends Error {
+  readonly code = "recoverable_branchless_git_worktree_reuse";
+
+  constructor(cwd: string) {
+    super(
+      `Execution workspace "${cwd}" is missing and cannot be restored because no branch name is recorded; not a git repository reuse requires a fresh isolated workspace.`,
+    );
+    this.name = "RecoverableBranchlessGitWorktreeReuseError";
+  }
+}
+
 export interface RuntimeServiceRef {
   id: string;
   companyId: string;
@@ -1496,7 +1507,7 @@ export async function ensurePersistedExecutionWorkspaceAvailable(input: {
   const worktreePath = realized.worktreePath ?? cwd;
   const branchName = asString(input.workspace.branchName, "").trim();
   if (!branchName) {
-    throw new Error(`Execution workspace "${cwd}" is missing and cannot be restored because no branch name is recorded.`);
+    throw new RecoverableBranchlessGitWorktreeReuseError(cwd);
   }
 
   await fs.mkdir(path.dirname(worktreePath), { recursive: true });

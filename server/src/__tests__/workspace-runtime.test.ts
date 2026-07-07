@@ -28,6 +28,7 @@ import {
   listConfiguredRuntimeServiceEntries,
   normalizeAdapterManagedRuntimeServices,
   reconcilePersistedRuntimeServicesOnStartup,
+  RecoverableBranchlessGitWorktreeReuseError,
   realizeExecutionWorkspace,
   releaseRuntimeServicesForRun,
   resetRuntimeServicesForTests,
@@ -1962,6 +1963,74 @@ describe("realizeExecutionWorkspace", () => {
     expect(restoredHead).toBe(expectedHead);
     const restoredTopLevel = await readGit(initial.cwd, ["rev-parse", "--show-toplevel"]);
     expect(path.resolve(restoredTopLevel)).toBe(path.resolve(initial.cwd));
+  }, 15_000);
+
+  it("signals recoverable reroute for a branchless reused git worktree that cannot self-heal", async () => {
+    const repoRoot = await createTempRepo();
+    const initial = await realizeExecutionWorkspace({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+        },
+      },
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-454",
+        title: "Branchless reused worktree",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    });
+
+    await runGit(repoRoot, ["worktree", "remove", "--force", initial.cwd]);
+    await fs.mkdir(initial.cwd, { recursive: true });
+    await fs.writeFile(path.join(initial.cwd, "stale.txt"), "stale\n", "utf8");
+
+    await expect(
+      ensurePersistedExecutionWorkspaceAvailable({
+        base: {
+          baseCwd: repoRoot,
+          source: "project_primary",
+          projectId: "project-1",
+          workspaceId: "workspace-1",
+          repoUrl: null,
+          repoRef: "HEAD",
+        },
+        workspace: {
+          mode: "isolated_workspace",
+          strategyType: "git_worktree",
+          cwd: initial.cwd,
+          providerRef: initial.worktreePath,
+          projectId: "project-1",
+          projectWorkspaceId: "workspace-1",
+          repoUrl: null,
+          baseRef: "HEAD",
+          branchName: null,
+        },
+        issue: {
+          id: "issue-1",
+          identifier: "PAP-454",
+          title: "Branchless reused worktree",
+        },
+        agent: {
+          id: "agent-1",
+          name: "Codex Coder",
+          companyId: "company-1",
+        },
+      }),
+    ).rejects.toThrow(RecoverableBranchlessGitWorktreeReuseError);
   }, 15_000);
 
   it("reprovisions an existing persisted git worktree before manual control starts it", async () => {

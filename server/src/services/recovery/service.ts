@@ -2542,6 +2542,12 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       const brokenGitReuse =
         isUnsuccessfulTerminalIssueRun(latestRun) &&
         (await shouldForceFreshWorkspaceForBrokenGitReuse(issue, latestRun));
+      let forcedFreshWorkspace = false;
+      const forceFreshWorkspaceBeforeRetry = async () => {
+        if (!brokenGitReuse || forcedFreshWorkspace) return;
+        await forceFreshIsolatedWorkspaceForRecovery(issue);
+        forcedFreshWorkspace = true;
+      };
       if (isStrandedIssueRecoveryIssue(issue) && isUnsuccessfulTerminalIssueRun(latestRun)) {
         const updated = await escalateStrandedRecoveryIssueInPlace({
           issue,
@@ -2585,6 +2591,30 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         }
 
         if (didAutomaticRecoveryFail(latestRun, "assignment_recovery")) {
+          if (brokenGitReuse) {
+            if (await isInvocationBudgetBlocked(issue, agentId)) {
+              result.skipped += 1;
+              continue;
+            }
+
+            await forceFreshWorkspaceBeforeRetry();
+            const queued = await enqueueStrandedIssueRecovery({
+              issueId: issue.id,
+              agentId,
+              reason: "issue_assignment_recovery",
+              retryReason: "assignment_recovery",
+              source: "issue.assignment_recovery",
+              retryOfRunId: latestRun?.id ?? issue.checkoutRunId ?? null,
+            });
+            if (queued) {
+              result.dispatchRequeued += 1;
+              result.issueIds.push(issue.id);
+            } else {
+              result.skipped += 1;
+            }
+            continue;
+          }
+
           const failureSummary = summarizeRunFailureForIssueComment(latestRun);
           const updated = await escalateStrandedAssignedIssue({
             issue,
@@ -2609,9 +2639,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
           continue;
         }
 
-        if (brokenGitReuse) {
-          await forceFreshIsolatedWorkspaceForRecovery(issue);
-        }
+        await forceFreshWorkspaceBeforeRetry();
 
         const queued = await enqueueStrandedIssueRecovery({
           issueId: issue.id,
@@ -2619,7 +2647,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
           reason: "issue_assignment_recovery",
           retryReason: "assignment_recovery",
           source: "issue.assignment_recovery",
-          retryOfRunId: latestRun.id,
+          retryOfRunId: latestRun?.id ?? issue.checkoutRunId ?? null,
         });
         if (queued) {
           result.dispatchRequeued += 1;
@@ -2688,6 +2716,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
           continue;
         }
 
+        await forceFreshWorkspaceBeforeRetry();
         const queued = await enqueueStrandedIssueRecovery({
           issueId: issue.id,
           agentId,
@@ -2705,6 +2734,50 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         continue;
       }
       if (isUnsuccessfulTerminalIssueRun(latestRun)) {
+        if (didAutomaticRecoveryFail(latestRun, "assignment_recovery")) {
+          if (brokenGitReuse) {
+            if (await isInvocationBudgetBlocked(issue, agentId)) {
+              result.skipped += 1;
+              continue;
+            }
+
+            await forceFreshWorkspaceBeforeRetry();
+            const queued = await enqueueStrandedIssueRecovery({
+              issueId: issue.id,
+              agentId,
+              reason: "issue_assignment_recovery",
+              retryReason: "assignment_recovery",
+              source: "issue.assignment_recovery",
+              retryOfRunId: latestRun?.id ?? issue.checkoutRunId ?? null,
+            });
+            if (queued) {
+              result.dispatchRequeued += 1;
+              result.issueIds.push(issue.id);
+            } else {
+              result.skipped += 1;
+            }
+            continue;
+          }
+
+          const failureSummary = summarizeRunFailureForIssueComment(latestRun);
+          const updated = await escalateStrandedAssignedIssue({
+            issue,
+            previousStatus: "in_progress",
+            latestRun,
+            comment:
+              "Paperclip automatically retried dispatch for this assigned `todo` issue and the retry checked out " +
+              `the issue, but it still ended without a live execution path.${failureSummary ?? ""} ` +
+              "Moving it to `blocked` so it is visible for intervention.",
+          });
+          if (updated) {
+            result.escalated += 1;
+            result.issueIds.push(issue.id);
+          } else {
+            result.skipped += 1;
+          }
+          continue;
+        }
+
         // Reroute a torn-down reused git worktree to a fresh isolated workspace
         // and requeue once, before any escalate-to-`blocked` classification.
         // This covers in_progress continuation, review, and QA issues that
@@ -2717,7 +2790,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
             result.skipped += 1;
             continue;
           }
-          await forceFreshIsolatedWorkspaceForRecovery(issue);
+          await forceFreshWorkspaceBeforeRetry();
           const queued = await enqueueStrandedIssueRecovery({
             issueId: issue.id,
             agentId,
@@ -2803,9 +2876,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         continue;
       }
 
-      if (brokenGitReuse) {
-        await forceFreshIsolatedWorkspaceForRecovery(issue);
-      }
+      await forceFreshWorkspaceBeforeRetry();
 
       const queued = await enqueueStrandedIssueRecovery({
         issueId: issue.id,
