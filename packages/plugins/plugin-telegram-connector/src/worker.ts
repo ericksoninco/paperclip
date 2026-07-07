@@ -7,6 +7,10 @@ import {
   PROCESSED_UPDATE_PREFIX,
   STATE_NAMESPACE,
 } from "./constants.js";
+import {
+  TELEGRAM_LONG_POLL_TIMEOUT_SECONDS_DEFAULT,
+  TELEGRAM_LONG_POLL_TIMEOUT_SECONDS_MAX,
+} from "./polling-config.js";
 
 interface TelegramConnectorConfig {
   tokenSecretRef?: string;
@@ -101,7 +105,13 @@ async function getConfig(ctx: PluginContext): Promise<Required<Pick<TelegramConn
     allowedChatId: stringValue(raw.allowedChatId),
     assigneeAgentId: stringValue(raw.assigneeAgentId),
     projectId: stringValue(raw.projectId),
-    timeoutSeconds: Math.max(0, Math.min(45, numberValue(raw.timeoutSeconds) ?? 45)),
+    timeoutSeconds: Math.max(
+      0,
+      Math.min(
+        TELEGRAM_LONG_POLL_TIMEOUT_SECONDS_MAX,
+        numberValue(raw.timeoutSeconds) ?? TELEGRAM_LONG_POLL_TIMEOUT_SECONDS_DEFAULT,
+      ),
+    ),
   };
 }
 
