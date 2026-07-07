@@ -722,6 +722,51 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     return { companyId, agentId, issueId };
   }
 
+  async function attachBrokenGitReuseWorkspace(input: {
+    companyId: string;
+    issueId: string;
+    mode?: "shared_workspace" | "isolated_workspace";
+  }) {
+    const executionWorkspaceId = randomUUID();
+    const projectId = randomUUID();
+    const mode = input.mode ?? "shared_workspace";
+    await db.insert(projects).values({
+      id: projectId,
+      companyId: input.companyId,
+      name: "Runtime",
+      status: "active",
+    });
+    await db.insert(executionWorkspaces).values({
+      id: executionWorkspaceId,
+      companyId: input.companyId,
+      projectId,
+      mode,
+      strategyType: "git_worktree",
+      name: `${mode} broken worktree`,
+      status: "active",
+      cwd: `/tmp/paperclip-broken-${mode}-worktree`,
+      providerType: "git_worktree",
+      providerRef: `/tmp/paperclip-broken-${mode}-worktree`,
+      branchName: `PAP-1301-${mode}-reuse`,
+      baseRef: "HEAD",
+      metadata: { createdByRuntime: true },
+    });
+    await db
+      .update(issues)
+      .set({
+        projectId,
+        executionWorkspaceId,
+        executionWorkspacePreference: "reuse_existing",
+        executionWorkspaceSettings: {
+          mode,
+          reuseExistingExecutionWorkspaceId: executionWorkspaceId,
+        },
+      })
+      .where(eq(issues.id, input.issueId));
+
+    return { executionWorkspaceId, projectId };
+  }
+
   async function expectSourceScopedStrandedRecoveryAction(input: {
     companyId: string;
     agentId: string;
@@ -2163,6 +2208,71 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(comments[0]?.body).toContain("Recovery owner: [CodexCoder]");
   });
 
+  it("reroutes a broken reused git worktree todo to a fresh assignment retry instead of blocking", async () => {
+    const { companyId, issueId } = await seedStrandedIssueFixture({
+      status: "todo",
+      runStatus: "failed",
+      retryReason: "assignment_recovery",
+      runErrorCode: "adapter_failed",
+      runError: "fatal: not a git repository (or any of the parent directories): .git",
+    });
+    const { executionWorkspaceId } = await attachBrokenGitReuseWorkspace({
+      companyId,
+      issueId,
+      mode: "isolated_workspace",
+    });
+    const heartbeat = heartbeatService(db);
+
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+
+    expect(result.dispatchRequeued).toBe(1);
+    expect(result.escalated).toBe(0);
+    expect(result.issueIds).toEqual([issueId]);
+
+    const rerouted = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(rerouted?.status).toBe("todo");
+    expect(rerouted?.executionWorkspaceId).toBeNull();
+    expect(rerouted?.executionWorkspacePreference).toBeNull();
+    expect(rerouted?.executionWorkspaceSettings).toMatchObject({
+      mode: "isolated_workspace",
+      reuseExistingExecutionWorkspaceId: executionWorkspaceId,
+    });
+  });
+
+  it("blocks after the fresh assignment retry fails without a reused git workspace", async () => {
+    const { companyId, agentId, issueId, runId } = await seedStrandedIssueFixture({
+      status: "in_progress",
+      runStatus: "failed",
+      retryReason: "assignment_recovery",
+      runErrorCode: "adapter_failed",
+      runError: "fresh workspace still failed",
+    });
+    const heartbeat = heartbeatService(db);
+
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+
+    expect(result.dispatchRequeued).toBe(0);
+    expect(result.continuationRequeued).toBe(0);
+    expect(result.escalated).toBe(1);
+    expect(result.issueIds).toEqual([issueId]);
+
+    const blocked = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(blocked).toMatchObject({
+      status: "blocked",
+      executionWorkspaceId: null,
+      executionWorkspacePreference: null,
+    });
+
+    await expectSourceScopedStrandedRecoveryAction({
+      companyId,
+      agentId,
+      issueId,
+      runId,
+      previousStatus: "in_progress",
+      retryReason: "assignment_recovery",
+    });
+  });
+
   it("blocks an already stranded recovery issue without creating a recovery child", async () => {
     const { companyId, issueId } = await seedStrandedIssueFixture({
       status: "todo",
@@ -3086,48 +3196,17 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(wakeups).toHaveLength(1);
   });
 
-  it("routes repeated broken shared reuse_existing git worktree failures to a fresh isolated workspace", async () => {
+  it.each([
+    "shared_workspace",
+    "isolated_workspace",
+  ] as const)("routes repeated broken %s reuse_existing git worktree failures to a fresh isolated workspace", async (mode) => {
     const { companyId, agentId, issueId, runId } = await seedStrandedIssueFixture({
       status: "in_progress",
       runStatus: "failed",
       runErrorCode: "adapter_failed",
       runError: "fatal: not a git repository (or any of the parent directories): .git",
     });
-    const executionWorkspaceId = randomUUID();
-    const projectId = randomUUID();
-    await db.insert(projects).values({
-      id: projectId,
-      companyId,
-      name: "Runtime",
-      status: "active",
-    });
-    await db.insert(executionWorkspaces).values({
-      id: executionWorkspaceId,
-      companyId,
-      projectId,
-      mode: "shared_workspace",
-      strategyType: "git_worktree",
-      name: "shared broken worktree",
-      status: "active",
-      cwd: "/tmp/paperclip-broken-shared-worktree",
-      providerType: "git_worktree",
-      providerRef: "/tmp/paperclip-broken-shared-worktree",
-      branchName: "PAP-1301-shared-reuse",
-      baseRef: "HEAD",
-      metadata: { createdByRuntime: true },
-    });
-    await db
-      .update(issues)
-      .set({
-        projectId,
-        executionWorkspaceId,
-        executionWorkspacePreference: "reuse_existing",
-        executionWorkspaceSettings: {
-          mode: "shared_workspace",
-          reuseExistingExecutionWorkspaceId: executionWorkspaceId,
-        },
-      })
-      .where(eq(issues.id, issueId));
+    const { executionWorkspaceId } = await attachBrokenGitReuseWorkspace({ companyId, issueId, mode });
     const heartbeat = heartbeatService(db);
 
     const result = await heartbeat.reconcileStrandedAssignedIssues();
