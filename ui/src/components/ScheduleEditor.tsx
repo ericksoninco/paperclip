@@ -268,7 +268,9 @@ export function ScheduleEditor({
               const nextValidation = getScheduleCronValidation(nextCron);
               setCustomCron(nextCron);
               onValidityChange?.(nextValidation.valid);
-              emitChange("custom", hour, minute, dayOfWeek, dayOfMonth, nextCron);
+              if (nextValidation.valid) {
+                emitChange("custom", hour, minute, dayOfWeek, dayOfMonth, nextCron);
+              }
             }}
             placeholder="0 10 * * *"
             aria-label="Cron expression"
