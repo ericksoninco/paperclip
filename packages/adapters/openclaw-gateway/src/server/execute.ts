@@ -7,7 +7,6 @@ import {
   asNumber,
   asString,
   buildPaperclipEnv,
-  normalizePaperclipWakePayload,
   parseObject,
   readPaperclipIssueWorkModeFromContext,
   renderPaperclipWakePrompt,
@@ -18,7 +17,7 @@ import { WebSocket } from "ws";
 
 type SessionKeyStrategy = "fixed" | "issue" | "run";
 
-export type WakePayload = {
+type WakePayload = {
   runId: string;
   agentId: string;
   companyId: string;
@@ -87,48 +86,7 @@ type GatewayClientRequestOptions = {
   expectFinal?: boolean;
 };
 
-export const PROTOCOL_VERSION = 4;
-// Mirrors OpenClaw v4 AgentParamsSchema in openclaw/src/gateway/protocol/schema/agent.ts.
-export const OPENCLAW_V4_AGENT_PARAM_KEYS = [
-  "message",
-  "agentId",
-  "provider",
-  "model",
-  "to",
-  "replyTo",
-  "sessionId",
-  "sessionKey",
-  "thinking",
-  "deliver",
-  "attachments",
-  "channel",
-  "replyChannel",
-  "accountId",
-  "replyAccountId",
-  "threadId",
-  "groupId",
-  "groupChannel",
-  "groupSpace",
-  "timeout",
-  "bestEffortDeliver",
-  "lane",
-  "cleanupBundleMcpOnRunEnd",
-  "modelRun",
-  "promptMode",
-  "extraSystemPrompt",
-  "bootstrapContextMode",
-  "bootstrapContextRunKind",
-  "acpTurnSource",
-  "internalRuntimeHandoffId",
-  "internalEvents",
-  "inputProvenance",
-  "voiceWakeTrigger",
-  "idempotencyKey",
-  "label",
-  "paperclip",
-] as const;
-
-const OPENCLAW_V4_AGENT_PARAM_KEY_SET = new Set<string>(OPENCLAW_V4_AGENT_PARAM_KEYS);
+const PROTOCOL_VERSION = 4;
 const DEFAULT_SCOPES = ["operator.admin"];
 const DEFAULT_CLIENT_ID = "gateway-client";
 const DEFAULT_CLIENT_MODE = "backend";
@@ -174,61 +132,6 @@ function normalizeSessionKeyStrategy(value: unknown): SessionKeyStrategy {
   const normalized = asString(value, "issue").trim().toLowerCase();
   if (normalized === "fixed" || normalized === "run") return normalized;
   return "issue";
-}
-
-export function buildOpenClawAgentParams(input: {
-  payloadTemplate: Record<string, unknown>;
-  message: string;
-  sessionKey: string;
-  idempotencyKey: string;
-  configuredAgentId: string | null;
-  waitTimeoutMs: number;
-  paperclipWake?: Record<string, unknown> | null;
-}): Record<string, unknown> {
-  const agentParams: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(input.payloadTemplate)) {
-    if (OPENCLAW_V4_AGENT_PARAM_KEY_SET.has(key)) {
-      agentParams[key] = value;
-    }
-  }
-
-  agentParams.message = input.message;
-  agentParams.sessionKey = input.sessionKey;
-  agentParams.idempotencyKey = input.idempotencyKey;
-
-  if (input.configuredAgentId && !nonEmpty(agentParams.agentId)) {
-    agentParams.agentId = input.configuredAgentId;
-  }
-
-  if (typeof agentParams.timeout !== "number") {
-    agentParams.timeout = input.waitTimeoutMs;
-  }
-
-  if (input.paperclipWake) {
-    agentParams.paperclip = {
-      ...(asRecord(agentParams.paperclip) ?? {}),
-      wake: input.paperclipWake,
-    };
-  }
-
-  return agentParams;
-}
-
-export function buildOpenClawPaperclipWakeEnvelope(input: {
-  structuredWake: unknown;
-  wakePayload: WakePayload;
-}): Record<string, unknown> | null {
-  const normalized = normalizePaperclipWakePayload(input.structuredWake);
-  if (normalized) return parseObject(input.structuredWake);
-
-  const wake: Record<string, unknown> = {};
-  if (input.wakePayload.wakeReason) wake.reason = input.wakePayload.wakeReason;
-  if (input.wakePayload.wakeCommentId) {
-    wake.latestCommentId = input.wakePayload.wakeCommentId;
-    wake.commentIds = [input.wakePayload.wakeCommentId];
-  }
-
-  return Object.keys(wake).length > 0 ? wake : null;
 }
 
 function prefixSessionKeyForAgent(sessionKey: string, agentId: string | null): string {
@@ -340,7 +243,11 @@ function resolveAuthToken(config: Record<string, unknown>, headers: Record<strin
   const authHeader =
     headerMapGetIgnoreCase(headers, "x-openclaw-auth") ??
     headerMapGetIgnoreCase(headers, "authorization");
-  return tokenFromAuthHeader(authHeader);
+  const fromHeader = tokenFromAuthHeader(authHeader);
+  if (fromHeader) return fromHeader;
+
+  // Fallback to environment variable
+  return nonEmpty(process.env.OPENCLAW_TOKEN);
 }
 
 function isSensitiveLogKey(key: string): boolean {
@@ -561,6 +468,34 @@ function joinWakePayloadSections(structuredWakePrompt: string, structuredWakeJso
     "```",
   ].filter((entry) => entry.trim().length > 0);
   return sections.join("\n");
+}
+
+export function buildAgentParams(input: {
+  payloadTemplate: Record<string, unknown>;
+  message: string;
+  sessionKey: string;
+  runId: string;
+  configuredAgentId: string | null;
+  waitTimeoutMs: number;
+}): Record<string, unknown> {
+  const agentParams: Record<string, unknown> = {
+    ...input.payloadTemplate,
+    message: input.message,
+    sessionKey: input.sessionKey,
+    idempotencyKey: input.runId,
+  };
+  delete agentParams.text;
+  delete agentParams.paperclip;
+
+  if (input.configuredAgentId && !nonEmpty(agentParams.agentId)) {
+    agentParams.agentId = input.configuredAgentId;
+  }
+
+  if (typeof agentParams.timeout !== "number") {
+    agentParams.timeout = input.waitTimeoutMs;
+  }
+
+  return agentParams;
 }
 
 function normalizeUrl(input: string): URL | null {
@@ -1151,10 +1086,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const paperclipEnv = buildPaperclipEnvForWake(ctx, wakePayload);
   const structuredWakePrompt = renderPaperclipWakePrompt(ctx.context.paperclipWake);
   const structuredWakeJson = stringifyPaperclipWakePayload(ctx.context.paperclipWake);
-  const paperclipWake = buildOpenClawPaperclipWakeEnvelope({
-    structuredWake: ctx.context.paperclipWake,
-    wakePayload,
-  });
   const wakeText = buildWakeText(
     wakePayload,
     paperclipEnv,
@@ -1165,10 +1096,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const sessionKeyStrategy = normalizeSessionKeyStrategy(ctx.config.sessionKeyStrategy);
   const configuredSessionKey = nonEmpty(ctx.config.sessionKey);
+  const configuredAgentId = nonEmpty(ctx.config.agentId);
   const sessionKey = resolveSessionKey({
     strategy: sessionKeyStrategy,
     configuredSessionKey,
-    agentId: nonEmpty(ctx.config.agentId),
+    agentId: configuredAgentId,
     runId: ctx.runId,
     issueId: wakePayload.issueId,
   });
@@ -1176,15 +1108,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const templateMessage = nonEmpty(payloadTemplate.message) ?? nonEmpty(payloadTemplate.text);
   const message = templateMessage ? appendWakeText(templateMessage, wakeText) : wakeText;
 
-  const configuredAgentId = nonEmpty(ctx.config.agentId);
-  const agentParams = buildOpenClawAgentParams({
+  const agentParams = buildAgentParams({
     payloadTemplate,
     message,
     sessionKey,
-    idempotencyKey: ctx.runId,
+    runId: ctx.runId,
     configuredAgentId,
     waitTimeoutMs,
-    paperclipWake,
   });
 
   if (ctx.onMeta) {
@@ -1222,6 +1152,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const autoPairOnFirstConnect = parseBoolean(ctx.config.autoPairOnFirstConnect, true);
   let autoPairAttempted = false;
   let latestResultPayload: unknown = null;
+  let retryCount = 0;
+  const MAX_RETRIES = 2;
 
   while (true) {
     const trackedRunIds = new Set<string>([ctx.runId]);
@@ -1509,6 +1441,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           "stderr",
           `[openclaw-gateway] auto-pairing failed: ${pairResult.reason}\n`,
         );
+      }
+
+      // Retry transient errors (connection refused, reset, socket hang up)
+      const isTransient =
+        !pairingRequired &&
+        (lower.includes("econnrefused") ||
+          lower.includes("econnreset") ||
+          lower.includes("socket hang up") ||
+          (timedOut && !lower.includes("agent.wait")));
+
+      if (isTransient && retryCount < MAX_RETRIES) {
+        retryCount++;
+        const backoffMs = retryCount * 2000;
+        await ctx.onLog(
+          "stdout",
+          `[openclaw-gateway] transient error, retry ${retryCount}/${MAX_RETRIES} after ${backoffMs}ms: ${message}\n`,
+        );
+        await new Promise((r) => setTimeout(r, backoffMs));
+        continue;
       }
 
       const detailedMessage = pairingRequired

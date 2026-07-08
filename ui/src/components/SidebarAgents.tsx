@@ -9,7 +9,9 @@ import {
   Pencil,
   PlayCircle,
   Plus,
+  Star,
   Users,
+  AlertTriangle,
 } from "lucide-react";
 import { useCompany } from "../context/CompanyContext";
 import { useDialogActions } from "../context/DialogContext";
@@ -20,9 +22,15 @@ import { authApi } from "../api/auth";
 import { heartbeatsApi } from "../api/heartbeats";
 import { SIDEBAR_SCROLL_RESET_STATE } from "../lib/navigation-scroll";
 import { queryKeys } from "../lib/queryKeys";
-import { cn, agentRouteRef, agentUrl } from "../lib/utils";
+import { cn, agentRouteRef, agentUrl, SIDEBAR_RAIL_HIDDEN_LABEL } from "../lib/utils";
 import { useAgentOrder } from "../hooks/useAgentOrder";
-import { resourceMembershipState, useResourceMembershipMutation, useResourceMemberships } from "../hooks/useResourceMemberships";
+import {
+  isStarred,
+  resourceMembershipState,
+  starredResourceIds,
+  useResourceMembershipMutation,
+  useResourceMemberships,
+} from "../hooks/useResourceMemberships";
 import {
   AGENT_SORT_MODE_UPDATED_EVENT,
   getAgentSortModeStorageKey,
@@ -34,6 +42,7 @@ import {
 import { AgentIcon } from "./AgentIconPicker";
 import { BudgetSidebarMarker } from "./BudgetSidebarMarker";
 import { SidebarSection, type SidebarSectionRadioChoice } from "./SidebarSection";
+import { StarToggle } from "./StarToggle";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -42,7 +51,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Agent } from "@paperclipai/shared";
+
+/**
+ * When no agent is running, the sidebar falls back to showing at most this many
+ * recently-active agents plus a "See all agents" link (IA Phase 5).
+ */
+const RECENT_AGENT_LIMIT = 5;
 
 const AGENT_SORT_CHOICES: SidebarSectionRadioChoice[] = [
   { value: "top", label: "Top" },
@@ -79,6 +95,10 @@ function sortAgents(agents: Agent[], sortMode: AgentSidebarSortMode): Agent[] {
   return sorted;
 }
 
+// Sidebar star reveals with the agent row's own group, not the shared group.
+const AGENT_STAR_ROW_REVEAL =
+  "opacity-0 transition-opacity group-hover/agent:opacity-100 group-focus-within/agent:opacity-100";
+
 function SidebarAgentItem({
   activeAgentId,
   activeTab,
@@ -88,8 +108,12 @@ function SidebarAgentItem({
   leaving,
   onLeaveAgent,
   onPauseResume,
+  rail,
   runCount,
   setSidebarOpen,
+  starred = false,
+  onToggleStar,
+  starPending = false,
 }: {
   activeAgentId: string | null;
   activeTab: string | null;
@@ -99,8 +123,12 @@ function SidebarAgentItem({
   leaving: boolean;
   onLeaveAgent: (agent: Agent) => void;
   onPauseResume: (agent: Agent, action: "pause" | "resume") => void;
+  rail: boolean;
   runCount: number;
   setSidebarOpen: (open: boolean) => void;
+  starred?: boolean;
+  onToggleStar?: (agent: Agent, starred: boolean) => void;
+  starPending?: boolean;
 }) {
   const routeRef = agentRouteRef(agent);
   const href = activeTab ? `${agentUrl(agent)}/${activeTab}` : agentUrl(agent);
@@ -108,51 +136,93 @@ function SidebarAgentItem({
   const isActive = activeAgentId === routeRef;
   const isPaused = agent.status === "paused";
   const isBudgetPaused = isPaused && agent.pauseReason === "budget";
+  const hasInvalidOrgChain = agent.orgChainHealth?.status === "invalid_org_chain";
   const pauseResumeLabel = isPaused ? "Resume agent" : "Pause agent";
-  const pauseResumeDisabled = disabled || agent.status === "pending_approval" || isBudgetPaused;
+  const pauseResumeDisabled = disabled || agent.status === "pending_approval" || isBudgetPaused || (isPaused && hasInvalidOrgChain);
   const pauseResumeDisabledLabel = disabled
     ? "Updating..."
     : isBudgetPaused
       ? "Budget paused"
+      : isPaused && hasInvalidOrgChain
+        ? "Invalid org chain"
       : pauseResumeLabel;
+
+  const link = (
+    <NavLink
+      to={href}
+      state={SIDEBAR_SCROLL_RESET_STATE}
+      onClick={() => {
+        if (isMobile) setSidebarOpen(false);
+      }}
+      className={cn(
+        "flex min-w-0 flex-1 items-center gap-2.5 px-3 py-1.5 pointer-coarse:py-1 text-(length:--text-compact) font-medium transition-colors",
+        // Reserve room for the ⋯ menu, plus the inline unstar star on starred rows.
+        starred && !isMobile ? "pr-14" : "pr-8",
+        isActive
+          ? "bg-accent text-foreground"
+          : "text-foreground/80 hover:bg-accent/50 hover:text-foreground"
+      )}
+    >
+      <AgentIcon icon={agent.icon} className="shrink-0 h-3.5 w-3.5 text-muted-foreground" />
+      <span className={rail ? SIDEBAR_RAIL_HIDDEN_LABEL : "flex-1 truncate"}>{agent.name}</span>
+      {!rail && hasInvalidOrgChain ? (
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" aria-label="Invalid reporting chain" />
+      ) : null}
+      {!rail && (agent.pauseReason === "budget" || runCount > 0) && (
+        <span className="ml-auto flex items-center gap-1.5 shrink-0">
+          {agent.pauseReason === "budget" ? (
+            <BudgetSidebarMarker title="Agent paused by budget" />
+          ) : null}
+          {runCount > 0 ? (
+            <span className="relative flex h-2 w-2">
+              <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+            </span>
+          ) : null}
+          {runCount > 0 ? (
+            <span className="text-(length:--text-micro) font-medium text-blue-600 dark:text-blue-400">
+              {runCount} live
+            </span>
+          ) : null}
+        </span>
+      )}
+    </NavLink>
+  );
 
   return (
     <div className="group/agent relative flex items-center">
-      <NavLink
-        to={href}
-        state={SIDEBAR_SCROLL_RESET_STATE}
-        onClick={() => {
-          if (isMobile) setSidebarOpen(false);
-        }}
-        className={cn(
-          "flex min-w-0 flex-1 items-center gap-2.5 px-3 py-1.5 pointer-coarse:py-1 pr-8 text-[13px] font-medium transition-colors",
-          isActive
-            ? "bg-accent text-foreground"
-            : "text-foreground/80 hover:bg-accent/50 hover:text-foreground"
-        )}
-      >
-        <AgentIcon icon={agent.icon} className="shrink-0 h-3.5 w-3.5 text-muted-foreground" />
-        <span className="flex-1 truncate">{agent.name}</span>
-        {(agent.pauseReason === "budget" || runCount > 0) && (
-          <span className="ml-auto flex items-center gap-1.5 shrink-0">
-            {agent.pauseReason === "budget" ? (
-              <BudgetSidebarMarker title="Agent paused by budget" />
-            ) : null}
-            {runCount > 0 ? (
-              <span className="relative flex h-2 w-2">
-                <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
-              </span>
-            ) : null}
-            {runCount > 0 ? (
-              <span className="text-[11px] font-medium text-blue-600 dark:text-blue-400">
-                {runCount} live
-              </span>
-            ) : null}
-          </span>
-        )}
-      </NavLink>
+      {rail ? (
+        // Anchor the tooltip to a wrapper, not the NavLink: Radix `asChild` (Slot)
+        // drops React Router's function className, which would strip `flex` off the
+        // <a> and let the in-flow label stack under the icon, growing the row.
+        // Keeping the <a> out of Slot preserves a 1:1 row height with the expanded
+        // state so the icon never moves (PAP-10676).
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="min-w-0 flex-1">{link}</div>
+          </TooltipTrigger>
+          <TooltipContent side="right">{agent.name}</TooltipContent>
+        </Tooltip>
+      ) : (
+        link
+      )}
 
+      {!rail && starred && !isMobile && onToggleStar ? (
+        // Desktop: quiet inline unstar, left of the ⋯ menu, revealed on hover/focus.
+        <span className="absolute right-8 top-1/2 -translate-y-1/2">
+          <StarToggle
+            size="row"
+            quiet
+            starred
+            pending={starPending}
+            resourceName={agent.name}
+            onToggle={() => onToggleStar(agent, false)}
+            revealClassName={AGENT_STAR_ROW_REVEAL}
+          />
+        </span>
+      ) : null}
+
+      {!rail && (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -169,7 +239,26 @@ function SidebarAgentItem({
             <MoreHorizontal className="h-3.5 w-3.5" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-44">
+        <DropdownMenuContent align="end" className="w-48">
+          {onToggleStar ? (
+            <>
+              <DropdownMenuItem
+                onClick={() => {
+                  if (starPending) return;
+                  onToggleStar(agent, !starred);
+                }}
+                disabled={starPending}
+              >
+                {starPending ? (
+                  <Loader2 className="size-4 motion-safe:animate-spin" />
+                ) : (
+                  <Star className={cn("size-4", starred && "fill-amber-500 text-amber-500")} />
+                )}
+                <span>{starred ? "Remove from starred" : "Star agent"}</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          ) : null}
           <DropdownMenuItem asChild>
             <Link
               to={editHref}
@@ -206,17 +295,19 @@ function SidebarAgentItem({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      )}
     </div>
   );
 }
 
-export function SidebarAgents() {
+export function SidebarAgents({ streamlined = false }: { streamlined?: boolean } = {}) {
   const [open, setOpen] = useState(true);
   const [pendingAgentIds, setPendingAgentIds] = useState<Set<string>>(() => new Set());
   const queryClient = useQueryClient();
   const { selectedCompanyId } = useCompany();
   const { openNewAgent } = useDialogActions();
-  const { isMobile, setSidebarOpen } = useSidebar();
+  const { isMobile, setSidebarOpen, collapsed, peeking } = useSidebar();
+  const rail = collapsed && !peeking;
   const { pushToast } = useToastActions();
   const location = useLocation();
 
@@ -276,6 +367,25 @@ export function SidebarAgents() {
     () => sortAgents(orderedAgents, sortMode),
     [orderedAgents, sortMode],
   );
+
+  // IA Phase 5 (streamlined): if any agent has a live run, show only those
+  // active agents. Otherwise fall back to up to RECENT_AGENT_LIMIT agents. Either
+  // way a "See all agents" link is shown so the full list is always reachable.
+  // Classic mode (PAP-89, flag OFF) restores the show-all behavior.
+  const runningAgents = useMemo(
+    () => sortedAgents.filter((agent: Agent) => (liveCountByAgent.get(agent.id) ?? 0) > 0),
+    [sortedAgents, liveCountByAgent],
+  );
+  const hasActiveAgents = runningAgents.length > 0;
+  const displayedAgents = !streamlined
+    ? sortedAgents
+    : hasActiveAgents
+      ? runningAgents
+      : sortedAgents.slice(0, RECENT_AGENT_LIMIT);
+  // Always expose "See all agents" whenever the displayed list is a subset of all
+  // agents, so users never lose the entry point to the full list. In classic mode
+  // every agent is already shown, so the link is unnecessary.
+  const showSeeAllLink = streamlined && sortedAgents.length > 0;
 
   const agentMatch = location.pathname.match(/^\/(?:[^/]+\/)?agents\/([^/]+)(?:\/([^/]+))?/);
   const activeAgentId = agentMatch?.[1] ?? null;
@@ -385,6 +495,59 @@ export function SidebarAgents() {
     [membershipMutation.isPending, membershipMutation.variables],
   );
 
+  const toggleStarAgent = useCallback(
+    (agent: Agent, starred: boolean) => membershipMutation.mutate({
+      resourceType: "agent",
+      resourceId: agent.id,
+      resourceName: agent.name,
+      starred,
+    }),
+    [membershipMutation],
+  );
+  const agentStarPending = useCallback(
+    (agent: Agent) =>
+      membershipMutation.isPending &&
+      membershipMutation.variables?.resourceType === "agent" &&
+      membershipMutation.variables.resourceId === agent.id &&
+      membershipMutation.variables.starred !== undefined,
+    [membershipMutation.isPending, membershipMutation.variables],
+  );
+
+  // Starred agents pin to the top of the section (name order), and are deduped
+  // out of the active/recent subset so no agent appears twice.
+  const starredAgentIdSet = useMemo(
+    () => new Set(starredResourceIds(membershipsQuery.data, "agent")),
+    [membershipsQuery.data],
+  );
+  const starredAgents = useMemo(
+    () => sortAgents(visibleAgents.filter((agent: Agent) => starredAgentIdSet.has(agent.id)), "alphabetical"),
+    [visibleAgents, starredAgentIdSet],
+  );
+  const dedupedDisplayedAgents = useMemo(
+    () => displayedAgents.filter((agent: Agent) => !starredAgentIdSet.has(agent.id)),
+    [displayedAgents, starredAgentIdSet],
+  );
+
+  const renderAgentRow = (agent: Agent, isStarredRow: boolean) => (
+    <SidebarAgentItem
+      key={agent.id}
+      activeAgentId={activeAgentId}
+      activeTab={activeTab}
+      agent={agent}
+      disabled={pendingAgentIds.has(agent.id)}
+      isMobile={isMobile}
+      leaving={agentLeaving(agent)}
+      onLeaveAgent={leaveAgent}
+      onPauseResume={(targetAgent, action) => pauseResumeAgent.mutate({ agent: targetAgent, action })}
+      rail={rail}
+      runCount={liveCountByAgent.get(agent.id) ?? 0}
+      setSidebarOpen={setSidebarOpen}
+      starred={isStarredRow || isStarred(membershipsQuery.data, "agent", agent.id)}
+      onToggleStar={toggleStarAgent}
+      starPending={agentStarPending(agent)}
+    />
+  );
+
   return (
     <SidebarSection
       label="Agents"
@@ -406,24 +569,32 @@ export function SidebarAgents() {
         onRadioValueChange: persistSortMode,
       }}
     >
-      {sortedAgents.map((agent: Agent) => {
-        const runCount = liveCountByAgent.get(agent.id) ?? 0;
-        return (
-          <SidebarAgentItem
-            key={agent.id}
-            activeAgentId={activeAgentId}
-            activeTab={activeTab}
-            agent={agent}
-            disabled={pendingAgentIds.has(agent.id)}
-            isMobile={isMobile}
-            leaving={agentLeaving(agent)}
-            onLeaveAgent={leaveAgent}
-            onPauseResume={(targetAgent, action) => pauseResumeAgent.mutate({ agent: targetAgent, action })}
-            runCount={runCount}
-            setSidebarOpen={setSidebarOpen}
-          />
+      {starredAgents.map((agent: Agent) => renderAgentRow(agent, true))}
+      {dedupedDisplayedAgents.map((agent: Agent) => renderAgentRow(agent, false))}
+      {showSeeAllLink && (() => {
+        const seeAllLink = (
+          <Link
+            to="/agents/all"
+            state={SIDEBAR_SCROLL_RESET_STATE}
+            aria-label={rail ? "See all agents" : undefined}
+            onClick={() => {
+              if (isMobile) setSidebarOpen(false);
+            }}
+            className="flex items-center gap-2.5 px-3 py-1.5 pointer-coarse:py-1 text-(length:--text-compact) font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          >
+            <Users className="shrink-0 h-3.5 w-3.5" />
+            <span className={rail ? SIDEBAR_RAIL_HIDDEN_LABEL : undefined}>See all agents</span>
+          </Link>
         );
-      })}
+        return rail ? (
+          <Tooltip>
+            <TooltipTrigger asChild>{seeAllLink}</TooltipTrigger>
+            <TooltipContent side="right">See all agents</TooltipContent>
+          </Tooltip>
+        ) : (
+          seeAllLink
+        );
+      })()}
     </SidebarSection>
   );
 }

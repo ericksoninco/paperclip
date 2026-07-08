@@ -1,11 +1,13 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { catalogManifest, catalogSkills, resolveCatalogSkillRef } from "./index.js";
-import type { CatalogSkill } from "./types.js";
 
 const EXPECTED_BUNDLED_KEYS = [
   "paperclipai/bundled/docs/doc-maintenance",
   "paperclipai/bundled/paperclip-operations/issue-triage",
   "paperclipai/bundled/paperclip-operations/task-planning",
+  "paperclipai/bundled/product/paperclip-capsules",
+  "paperclipai/bundled/product/wireframe",
   "paperclipai/bundled/quality/qa-acceptance",
   "paperclipai/bundled/software-development/github-pr-workflow",
 ];
@@ -13,7 +15,9 @@ const EXPECTED_BUNDLED_KEYS = [
 const EXPECTED_OPTIONAL_KEYS = [
   "paperclipai/optional/browser/agent-browser",
   "paperclipai/optional/content/release-announcement",
+  "paperclipai/optional/finance/ramp",
   "paperclipai/optional/product/design-critique",
+  "paperclipai/optional/research/last30days",
 ];
 
 describe("shipped skills catalog", () => {
@@ -31,9 +35,14 @@ describe("shipped skills catalog", () => {
     expect(optionalKeys).toEqual(EXPECTED_OPTIONAL_KEYS);
   });
 
-  it("keeps every shipped skill markdown-only until a script-bearing skill clears security review", () => {
-    const scriptBearing = catalogSkills.filter((skill) => skill.trustLevel !== "markdown_only");
-    expect(scriptBearing, formatViolations("script-bearing skills require security review", scriptBearing)).toEqual([]);
+  it("keeps script-bearing shipped skills explicit so install stays audit-gated", () => {
+    // The real install-time security boundary audits materialized bytes and blocks
+    // hard-stop findings. Static assets (svg/html templates, e.g. the wireframe skill)
+    // carry the "assets" trust level and are installable.
+    const scriptBearing = catalogSkills.filter((skill) => skill.trustLevel === "scripts_executables");
+    expect(scriptBearing.map((skill) => skill.key)).toEqual([
+      "paperclipai/optional/research/last30days",
+    ]);
   });
 
   it("populates browse/search-relevant fields for every shipped skill", () => {
@@ -81,10 +90,19 @@ describe("shipped skills catalog", () => {
     expect(resolveCatalogSkillRef(sample.key)).toMatchObject({ key: sample.key });
     expect(resolveCatalogSkillRef(sample.slug)).toMatchObject({ key: sample.key });
   });
-});
 
-function formatViolations(label: string, skills: CatalogSkill[]) {
-  if (skills.length === 0) return label;
-  const detail = skills.map((skill) => `${skill.key} (${skill.trustLevel})`).join(", ");
-  return `${label}: ${detail}`;
-}
+  it("keeps the Ramp wrapper fail-closed on mixed-provenance playbooks", () => {
+    const rampSkill = readFileSync(new URL("../catalog/optional/finance/ramp/SKILL.md", import.meta.url), "utf8");
+
+    expect(rampSkill).toContain("mixes Official and Community playbooks");
+    expect(rampSkill).toContain("do not execute them inside Paperclip unless a Paperclip approval explicitly names the playbook");
+    expect(rampSkill).toContain("third-party browser automation, MCP server, CLI, or connector");
+  });
+
+  it("keeps the Ramp wrapper clear of remote-fetch execution hard-stop patterns", () => {
+    const rampSkill = readFileSync(new URL("../catalog/optional/finance/ramp/SKILL.md", import.meta.url), "utf8");
+    const remoteExecPattern = /\b(?:curl|wget)\b[\s\S]{0,160}\|\s*(?:sh|bash)|\b(?:bash|sh)\s+-c\b|\beval\b|\bpython\s+-c\b|\bnode\s+-e\b/i;
+
+    expect(remoteExecPattern.test(rampSkill)).toBe(false);
+  });
+});

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   routineRevisionSnapshotV1Schema,
+  routineVariableSchema,
   updateRoutineSchema,
 } from "./routine.js";
 
@@ -82,5 +83,37 @@ describe("routine validators", () => {
       title: "Daily triage",
       baseRevisionId,
     }).baseRevisionId).toBe(baseRevisionId);
+  });
+
+  it("accepts empty routine run issue suppression on routine updates", () => {
+    expect(updateRoutineSchema.parse({
+      suppressEmptyRunIssues: true,
+    }).suppressEmptyRunIssues).toBe(true);
+  });
+
+  it("accepts date variables with valid YYYY-MM-DD defaults", () => {
+    expect(routineVariableSchema.parse({
+      name: "startDate",
+      type: "date",
+      defaultValue: "2024-02-29",
+    })).toMatchObject({
+      name: "startDate",
+      type: "date",
+      defaultValue: "2024-02-29",
+    });
+  });
+
+  it("rejects date variables with non-calendar or non-string defaults", () => {
+    expect(() => routineVariableSchema.parse({
+      name: "startDate",
+      type: "date",
+      defaultValue: "2024-02-30",
+    })).toThrow(/YYYY-MM-DD/);
+
+    expect(() => routineVariableSchema.parse({
+      name: "startDate",
+      type: "date",
+      defaultValue: 20240229,
+    })).toThrow(/YYYY-MM-DD/);
   });
 });

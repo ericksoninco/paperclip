@@ -7,12 +7,15 @@ import { useDialogActions } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { EntityRow } from "../components/EntityRow";
+import { ProjectTile } from "../components/ProjectTile";
 import { StatusBadge } from "../components/StatusBadge";
 import { MembershipAction } from "../components/MembershipAction";
+import { StarToggle } from "../components/StarToggle";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
-import { formatDate, projectUrl } from "../lib/utils";
+import { formatDate, formatNumber, formatProjectBudget, projectUrl } from "../lib/utils";
 import {
+  isStarred,
   resourceMembershipState,
   useResourceMembershipMutation,
   useResourceMemberships,
@@ -203,9 +206,13 @@ export function Projects() {
                     const pending = membershipMutation.isPending &&
                       membershipMutation.variables?.resourceType === "project" &&
                       membershipMutation.variables.resourceId === project.id;
+                    const starPending = pending && membershipMutation.variables?.starred !== undefined;
+                    const joinLeavePending = pending && membershipMutation.variables?.starred === undefined;
+                    const starred = isStarred(membershipsQuery.data, "project", project.id);
                     return (
                       <EntityRow
                         key={project.id}
+                        leading={<ProjectTile color={project.color ?? null} icon={project.icon ?? null} size="sm" />}
                         title={project.name}
                         subtitle={project.description ?? undefined}
                         reserveSubtitleSpace
@@ -213,16 +220,27 @@ export function Projects() {
                         className={state === "left" ? "group text-foreground/55" : "group"}
                         trailing={
                           <div className="flex items-center gap-3">
+                            <span
+                              className="hidden text-xs text-muted-foreground tabular-nums sm:inline"
+                              title={`${formatNumber(project.taskCount ?? 0)} task${(project.taskCount ?? 0) === 1 ? "" : "s"}`}
+                            >
+                              {formatNumber(project.taskCount ?? 0)} task{(project.taskCount ?? 0) === 1 ? "" : "s"}
+                            </span>
+                            {project.budget && (
+                              <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">
+                                {formatProjectBudget(project.budget)}
+                              </span>
+                            )}
                             {project.targetDate && (
-                              <span className="text-xs text-muted-foreground">
+                              <span className="hidden text-xs text-muted-foreground md:inline">
                                 {formatDate(project.targetDate)}
                               </span>
                             )}
                             <StatusBadge status={project.status} />
                             <MembershipAction
                               state={state}
-                              pending={pending}
-                              pendingState={pending ? membershipMutation.variables?.state : null}
+                              pending={joinLeavePending}
+                              pendingState={joinLeavePending ? membershipMutation.variables?.state : null}
                               resourceName={project.name}
                               onJoin={() => membershipMutation.mutate({
                                 resourceType: "project",
@@ -235,6 +253,18 @@ export function Projects() {
                                 resourceId: project.id,
                                 resourceName: project.name,
                                 state: "left",
+                              })}
+                            />
+                            <StarToggle
+                              size="row"
+                              starred={starred}
+                              pending={starPending}
+                              resourceName={project.name}
+                              onToggle={(next) => membershipMutation.mutate({
+                                resourceType: "project",
+                                resourceId: project.id,
+                                resourceName: project.name,
+                                starred: next,
                               })}
                             />
                           </div>
