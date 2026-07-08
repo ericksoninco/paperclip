@@ -168,7 +168,7 @@ export function Companies() {
                     <div className="flex items-center gap-2">
                       <h3 className="font-semibold text-base">{company.name}</h3>
                       <span
-                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-(length:--text-micro) font-medium ${
                           company.status === "active"
                             ? "bg-green-500/10 text-green-600 dark:text-green-400"
                             : company.status === "paused"
@@ -241,7 +241,7 @@ export function Companies() {
                 <div className="flex items-center gap-1.5">
                   <CircleDot className="h-3.5 w-3.5" />
                   <span>
-                    {issueCount} {issueCount === 1 ? "issue" : "issues"}
+                    {issueCount} {issueCount === 1 ? "task" : "tasks"}
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5 tabular-nums">

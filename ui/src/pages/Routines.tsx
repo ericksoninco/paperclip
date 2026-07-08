@@ -33,6 +33,7 @@ import {
 import { RoutineVariablesEditor, RoutineVariablesHint } from "../components/RoutineVariablesEditor";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -83,9 +84,9 @@ type RoutineGroup = {
 };
 
 const defaultRoutineViewState: RoutineViewState = {
-  sortField: "updated",
-  sortDir: "desc",
-  groupBy: "none",
+  sortField: "title",
+  sortDir: "asc",
+  groupBy: "project",
   collapsedGroups: [],
 };
 
@@ -121,6 +122,7 @@ function buildRoutineMutationPayload(input: {
   priority: string;
   concurrencyPolicy: string;
   catchUpPolicy: string;
+  suppressEmptyRunIssues: boolean;
   variables: RoutineVariable[];
 }) {
   return {
@@ -224,6 +226,7 @@ export function Routines() {
     priority: string;
     concurrencyPolicy: string;
     catchUpPolicy: string;
+    suppressEmptyRunIssues: boolean;
     variables: RoutineVariable[];
   }>({
     title: "",
@@ -233,6 +236,7 @@ export function Routines() {
     priority: "medium",
     concurrencyPolicy: "coalesce_if_active",
     catchUpPolicy: "skip_missed",
+    suppressEmptyRunIssues: false,
     variables: [],
   });
   const routineViewStateKey = selectedCompanyId
@@ -304,6 +308,7 @@ export function Routines() {
         priority: "medium",
         concurrencyPolicy: "coalesce_if_active",
         catchUpPolicy: "skip_missed",
+        suppressEmptyRunIssues: false,
         variables: [],
       });
       setComposerOpen(false);
@@ -417,9 +422,13 @@ export function Routines() {
     [projects],
   );
   const liveIssueIds = useMemo(() => collectLiveIssueIds(liveRuns), [liveRuns]);
+  const visibleRoutines = useMemo(
+    () => (routines ?? []).filter((routine) => routine.status !== "archived"),
+    [routines],
+  );
   const sortedRoutines = useMemo(
-    () => sortRoutines(routines ?? [], routineViewState.sortField, routineViewState.sortDir),
-    [routineViewState.sortDir, routineViewState.sortField, routines],
+    () => sortRoutines(visibleRoutines, routineViewState.sortField, routineViewState.sortDir),
+    [routineViewState.sortDir, routineViewState.sortField, visibleRoutines],
   );
   const routineGroups = useMemo(
     () => buildRoutineGroups(sortedRoutines, routineViewState.groupBy, projectById, agentById),
@@ -494,7 +503,7 @@ export function Routines() {
             Routines
           </h1>
           <p className="text-sm text-muted-foreground">
-            Recurring work definitions that materialize into auditable execution issues.
+            Recurring work definitions that materialize into auditable execution tasks.
           </p>
         </div>
         <Button onClick={() => setComposerOpen(true)}>
@@ -516,7 +525,7 @@ export function Routines() {
         <TabsContent value="routines" className="space-y-4">
           <div className="flex items-center justify-between gap-3">
             <p className="text-sm text-muted-foreground">
-              {(routines ?? []).length} routine{(routines ?? []).length === 1 ? "" : "s"}
+              {visibleRoutines.length} routine{visibleRoutines.length === 1 ? "" : "s"}
             </p>
             <div className="flex items-center gap-1">
               <Popover>
@@ -618,11 +627,11 @@ export function Routines() {
       >
         <DialogContent
           showCloseButton={false}
-          className="flex max-h-[calc(100dvh-2rem)] max-w-3xl flex-col gap-0 overflow-hidden p-0"
+          className="flex max-h-(--sz-calc-18) max-w-3xl flex-col gap-0 overflow-hidden p-0"
         >
           <div className="shrink-0 flex flex-wrap items-center justify-between gap-3 border-b border-border/60 px-5 py-3">
             <div>
-              <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">New routine</p>
+              <p className="text-xs font-medium uppercase tracking-(--tracking-caps) text-muted-foreground">New routine</p>
               <p className="text-sm text-muted-foreground">
                 Define the recurring work first. Default project and agent are optional for draft routines.
               </p>
@@ -684,10 +693,10 @@ export function Routines() {
                     value={draft.assigneeAgentId}
                     options={assigneeOptions}
                     recentOptionIds={recentAssigneeIds}
-                    placeholder="Assignee"
-                    noneLabel="No assignee"
-                    searchPlaceholder="Search assignees..."
-                    emptyMessage="No assignees found."
+                    placeholder="Responsible"
+                    noneLabel="No responsible"
+                    searchPlaceholder="Search responsible..."
+                    emptyMessage="No responsible found."
                     onChange={(assigneeAgentId) => {
                       if (assigneeAgentId) trackRecentAssignee(assigneeAgentId);
                       setDraft((current) => ({ ...current, assigneeAgentId }));
@@ -710,7 +719,7 @@ export function Routines() {
                           <span className="truncate">{option.label}</span>
                         )
                       ) : (
-                        <span className="text-muted-foreground">Assignee</span>
+                        <span className="text-muted-foreground">Responsible</span>
                       )
                     }
                     renderOption={(option) => {
@@ -744,7 +753,7 @@ export function Routines() {
                         <>
                           <span
                             className="h-3.5 w-3.5 shrink-0 rounded-sm"
-                            style={{ backgroundColor: currentProject.color ?? "#64748b" }}
+                            style={{ backgroundColor: currentProject.color ?? "var(--project-none)" }}
                           />
                           <span className="truncate">{option.label}</span>
                         </>
@@ -759,7 +768,7 @@ export function Routines() {
                         <>
                           <span
                             className="h-3.5 w-3.5 shrink-0 rounded-sm"
-                            style={{ backgroundColor: project?.color ?? "#64748b" }}
+                            style={{ backgroundColor: project?.color ?? "var(--project-none)" }}
                           />
                           <span className="truncate">{option.label}</span>
                         </>
@@ -777,7 +786,7 @@ export function Routines() {
                 onChange={(description) => setDraft((current) => ({ ...current, description }))}
                 placeholder="Add instructions..."
                 bordered={false}
-                contentClassName="min-h-[160px] text-sm text-muted-foreground"
+                contentClassName="min-h-(--sz-160px) text-sm text-muted-foreground"
                 mentions={mentionOptions}
                 onSubmit={() => {
                   if (!createRoutine.isPending && draft.title.trim() && draft.projectId && draft.assigneeAgentId) {
@@ -799,7 +808,7 @@ export function Routines() {
                 <CollapsibleContent className="pt-3">
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2">
-                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Concurrency</p>
+                      <p className="text-xs font-medium uppercase tracking-(--tracking-caps) text-muted-foreground">Concurrency</p>
                       <Select
                         value={draft.concurrencyPolicy}
                         onValueChange={(concurrencyPolicy) => setDraft((current) => ({ ...current, concurrencyPolicy }))}
@@ -816,7 +825,7 @@ export function Routines() {
                       <p className="text-xs text-muted-foreground">{concurrencyPolicyDescriptions[draft.concurrencyPolicy]}</p>
                     </div>
                     <div className="space-y-2">
-                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Catch-up</p>
+                      <p className="text-xs font-medium uppercase tracking-(--tracking-caps) text-muted-foreground">Catch-up</p>
                       <Select
                         value={draft.catchUpPolicy}
                         onValueChange={(catchUpPolicy) => setDraft((current) => ({ ...current, catchUpPolicy }))}
@@ -831,6 +840,23 @@ export function Routines() {
                         </SelectContent>
                       </Select>
                       <p className="text-xs text-muted-foreground">{catchUpPolicyDescriptions[draft.catchUpPolicy]}</p>
+                    </div>
+                    <div className="space-y-2 rounded-lg border border-border/60 p-3 md:col-span-2">
+                      <label className="flex items-start gap-3">
+                        <Checkbox
+                          checked={draft.suppressEmptyRunIssues}
+                          onCheckedChange={(checked) =>
+                            setDraft((current) => ({ ...current, suppressEmptyRunIssues: checked === true }))
+                          }
+                          aria-label="Hide empty routine runs"
+                        />
+                        <span className="space-y-1">
+                          <span className="block text-sm font-medium">Hide empty routine runs</span>
+                          <span className="block text-xs text-muted-foreground">
+                            Hide no-op execution issues from board lists while keeping routine run audit history.
+                          </span>
+                        </span>
+                      </label>
                     </div>
                   </div>
                 </CollapsibleContent>
@@ -873,59 +899,67 @@ export function Routines() {
 
       {activeTab === "routines" ? (
         <div>
-          {(routines ?? []).length === 0 ? (
+          {visibleRoutines.length === 0 ? (
             <div className="py-12">
               <EmptyState
                 icon={Repeat}
-                message="No routines yet. Use Create routine to define the first recurring workflow."
+                message="No active routines. Use Create routine to define the first recurring workflow."
               />
             </div>
           ) : (
-            <div className="rounded-lg border border-border">
-              {routineGroups.map((group) => (
-                <Collapsible
-                  key={group.key}
-                  open={!routineViewState.collapsedGroups.includes(group.key)}
-                  onOpenChange={(open) => {
-                    updateRoutineView({
-                      collapsedGroups: open
-                        ? routineViewState.collapsedGroups.filter((item) => item !== group.key)
-                        : [...routineViewState.collapsedGroups, group.key],
-                    });
-                  }}
-                >
-                  {group.label ? (
-                    <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-                      <CollapsibleTrigger className="flex items-center gap-1.5">
-                        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform [[data-state=open]>&]:rotate-90" />
-                        <span className="text-sm font-semibold uppercase tracking-wide">
-                          {group.label}
+            <div className="flex flex-col gap-3">
+              {routineGroups.map((group) => {
+                const isOpen = !routineViewState.collapsedGroups.includes(group.key);
+                return (
+                  <Collapsible
+                    key={group.key}
+                    open={isOpen}
+                    onOpenChange={(open) => {
+                      updateRoutineView({
+                        collapsedGroups: open
+                          ? routineViewState.collapsedGroups.filter((item) => item !== group.key)
+                          : [...routineViewState.collapsedGroups, group.key],
+                      });
+                    }}
+                  >
+                    {group.label ? (
+                      <div
+                        className={`flex items-center gap-2 rounded-lg border border-border px-3 py-2${
+                          isOpen ? " mb-1" : ""
+                        }`}
+                      >
+                        <CollapsibleTrigger className="flex items-center gap-1.5">
+                          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform [[data-state=open]>&]:rotate-90" />
+                          <span className="text-sm font-semibold uppercase tracking-wide">
+                            {group.label}
+                          </span>
+                        </CollapsibleTrigger>
+                        <span className="text-xs text-muted-foreground">
+                          {group.items.length}
                         </span>
-                      </CollapsibleTrigger>
-                      <span className="text-xs text-muted-foreground">
-                        {group.items.length}
-                      </span>
-                    </div>
-                  ) : null}
-                  <CollapsibleContent>
-                    {group.items.map((routine) => (
-                      <RoutineListRow
-                        key={routine.id}
-                        routine={routine}
-                        projectById={projectById}
-                        agentById={agentById}
-                        runningRoutineId={runningRoutineId}
-                        statusMutationRoutineId={statusMutationRoutineId}
-                        href={`/routines/${routine.id}`}
-                        runNowButton
-                        onRunNow={handleRunNow}
-                        onToggleEnabled={handleToggleEnabled}
-                        onToggleArchived={handleToggleArchived}
-                      />
-                    ))}
-                  </CollapsibleContent>
-                </Collapsible>
-              ))}
+                      </div>
+                    ) : null}
+                    <CollapsibleContent>
+                      {group.items.map((routine) => (
+                        <RoutineListRow
+                          key={routine.id}
+                          routine={routine}
+                          projectById={projectById}
+                          agentById={agentById}
+                          runningRoutineId={runningRoutineId}
+                          statusMutationRoutineId={statusMutationRoutineId}
+                          href={`/routines/${routine.id}`}
+                          runNowButton
+                          divider={false}
+                          onRunNow={handleRunNow}
+                          onToggleEnabled={handleToggleEnabled}
+                          onToggleArchived={handleToggleArchived}
+                        />
+                      ))}
+                    </CollapsibleContent>
+                  </Collapsible>
+                );
+              })}
             </div>
           )}
         </div>
