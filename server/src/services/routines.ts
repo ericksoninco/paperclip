@@ -492,6 +492,7 @@ function routineRevisionSnapshotRoutine(routine: RoutineRow): RoutineRevisionSna
     status: routine.status as RoutineRevisionSnapshotV1["routine"]["status"],
     concurrencyPolicy: routine.concurrencyPolicy as RoutineRevisionSnapshotV1["routine"]["concurrencyPolicy"],
     catchUpPolicy: routine.catchUpPolicy as RoutineRevisionSnapshotV1["routine"]["catchUpPolicy"],
+    suppressEmptyRunIssues: routine.suppressEmptyRunIssues,
     variables: routine.variables ?? [],
     env: routine.env ?? null,
     responsibleUserId: routine.responsibleUserId ?? null,
@@ -1930,6 +1931,7 @@ export function routineService(
             status,
             concurrencyPolicy: input.concurrencyPolicy,
             catchUpPolicy: input.catchUpPolicy,
+            suppressEmptyRunIssues: input.suppressEmptyRunIssues ?? false,
             variables,
             env,
             responsibleUserId,
@@ -2040,6 +2042,7 @@ export function routineService(
           status: nextStatus,
           concurrencyPolicy: patch.concurrencyPolicy ?? locked.concurrencyPolicy,
           catchUpPolicy: patch.catchUpPolicy ?? locked.catchUpPolicy,
+          suppressEmptyRunIssues: patch.suppressEmptyRunIssues ?? locked.suppressEmptyRunIssues,
           variables: nextVariables,
           env: nextEnv,
           responsibleUserId: locked.responsibleUserId ?? responsibleUserId,
@@ -2090,6 +2093,7 @@ export function routineService(
             status: candidate.status,
             concurrencyPolicy: candidate.concurrencyPolicy,
             catchUpPolicy: candidate.catchUpPolicy,
+            suppressEmptyRunIssues: candidate.suppressEmptyRunIssues,
             variables: candidate.variables,
             env: candidate.env,
             responsibleUserId: candidate.responsibleUserId,
@@ -2426,6 +2430,7 @@ export function routineService(
             status: routineSnapshot.status,
             concurrencyPolicy: routineSnapshot.concurrencyPolicy,
             catchUpPolicy: routineSnapshot.catchUpPolicy,
+            suppressEmptyRunIssues: routineSnapshot.suppressEmptyRunIssues ?? false,
             variables: routineSnapshot.variables,
             env: routineSnapshot.env,
             updatedByAgentId: actor.agentId ?? null,
@@ -2860,7 +2865,7 @@ export function routineService(
           return finalizeRun(issue.originRunId!, {
             status: "completed",
             completedAt,
-            executionOutcome: runContext?.suppressEmptyRunIssues ? "empty" : "worked",
+            executionOutcome: "empty",
           }, txDb);
         });
       }

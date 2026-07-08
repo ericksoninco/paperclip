@@ -33,6 +33,7 @@ import {
 import { RoutineVariablesEditor, RoutineVariablesHint } from "../components/RoutineVariablesEditor";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -121,6 +122,7 @@ function buildRoutineMutationPayload(input: {
   priority: string;
   concurrencyPolicy: string;
   catchUpPolicy: string;
+  suppressEmptyRunIssues: boolean;
   variables: RoutineVariable[];
 }) {
   return {
@@ -224,6 +226,7 @@ export function Routines() {
     priority: string;
     concurrencyPolicy: string;
     catchUpPolicy: string;
+    suppressEmptyRunIssues: boolean;
     variables: RoutineVariable[];
   }>({
     title: "",
@@ -233,6 +236,7 @@ export function Routines() {
     priority: "medium",
     concurrencyPolicy: "coalesce_if_active",
     catchUpPolicy: "skip_missed",
+    suppressEmptyRunIssues: false,
     variables: [],
   });
   const routineViewStateKey = selectedCompanyId
@@ -304,6 +308,7 @@ export function Routines() {
         priority: "medium",
         concurrencyPolicy: "coalesce_if_active",
         catchUpPolicy: "skip_missed",
+        suppressEmptyRunIssues: false,
         variables: [],
       });
       setComposerOpen(false);
@@ -835,6 +840,23 @@ export function Routines() {
                         </SelectContent>
                       </Select>
                       <p className="text-xs text-muted-foreground">{catchUpPolicyDescriptions[draft.catchUpPolicy]}</p>
+                    </div>
+                    <div className="space-y-2 rounded-lg border border-border/60 p-3 md:col-span-2">
+                      <label className="flex items-start gap-3">
+                        <Checkbox
+                          checked={draft.suppressEmptyRunIssues}
+                          onCheckedChange={(checked) =>
+                            setDraft((current) => ({ ...current, suppressEmptyRunIssues: checked === true }))
+                          }
+                          aria-label="Hide empty routine runs"
+                        />
+                        <span className="space-y-1">
+                          <span className="block text-sm font-medium">Hide empty routine runs</span>
+                          <span className="block text-xs text-muted-foreground">
+                            Hide no-op execution issues from board lists while keeping routine run audit history.
+                          </span>
+                        </span>
+                      </label>
                     </div>
                   </div>
                 </CollapsibleContent>

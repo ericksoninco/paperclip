@@ -87,6 +87,7 @@ const routine: RoutineDetailType = {
   status: "active",
   concurrencyPolicy: "coalesce_if_active",
   catchUpPolicy: "skip_missed",
+  suppressEmptyRunIssues: false,
   variables,
   env: { DATABASE_URL: { type: "secret_ref", secretId: "secret-prod-db", version: "latest" } } as never,
   latestRevisionId: "rev-17",
@@ -250,6 +251,7 @@ function makeContext(
     priority: routineDetail.priority,
     concurrencyPolicy: routineDetail.concurrencyPolicy,
     catchUpPolicy: routineDetail.catchUpPolicy,
+    suppressEmptyRunIssues: routineDetail.suppressEmptyRunIssues,
     variables: routineDetail.variables,
     env: routineDetail.env ?? null,
   };

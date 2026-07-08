@@ -773,7 +773,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     });
   });
 
-  it("records worked outcome without hiding noop routine issues when suppression is off", async () => {
+  it("records empty outcome without hiding noop routine issues when suppression is off", async () => {
     const { routine, svc } = await seedFixture();
 
     const run = await svc.runRoutine(routine.id, { source: "manual" });
@@ -799,7 +799,7 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     expect(finalIssue?.hiddenAt).toBeNull();
     expect(finalRun).toMatchObject({
       status: "completed",
-      executionOutcome: "worked",
+      executionOutcome: "empty",
     });
   });
 

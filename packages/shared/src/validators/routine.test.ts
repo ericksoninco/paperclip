@@ -85,6 +85,12 @@ describe("routine validators", () => {
     }).baseRevisionId).toBe(baseRevisionId);
   });
 
+  it("accepts empty routine run issue suppression on routine updates", () => {
+    expect(updateRoutineSchema.parse({
+      suppressEmptyRunIssues: true,
+    }).suppressEmptyRunIssues).toBe(true);
+  });
+
   it("accepts date variables with valid YYYY-MM-DD defaults", () => {
     expect(routineVariableSchema.parse({
       name: "startDate",

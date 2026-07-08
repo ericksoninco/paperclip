@@ -80,6 +80,7 @@ export interface Routine {
   status: string;
   concurrencyPolicy: string;
   catchUpPolicy: string;
+  suppressEmptyRunIssues: boolean;
   originKind?: string;
   originId?: string | null;
   variables: RoutineVariable[];
@@ -123,6 +124,7 @@ export interface RoutineRevisionSnapshotRoutineV1 {
   status: RoutineStatus;
   concurrencyPolicy: RoutineConcurrencyPolicy;
   catchUpPolicy: RoutineCatchUpPolicy;
+  suppressEmptyRunIssues: boolean;
   originKind?: string;
   originId?: string | null;
   variables: RoutineVariable[];

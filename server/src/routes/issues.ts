@@ -6972,6 +6972,10 @@ export function issueRoutes(
         res.status(403).json({ error: "Only the assigned agent can report a routine outcome" });
         return;
       }
+      if (req.body.status !== "done") {
+        res.status(422).json({ error: "routineOutcome requires status \"done\"" });
+        return;
+      }
     }
     if (
       (reopenRequested === true ||

@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -691,6 +692,23 @@ export function DeliverySection() {
           }
           options={catchUpPolicyOptions}
         />
+      </div>
+      <div className="rounded-lg border border-border/60 p-4">
+        <label className="flex items-start gap-3">
+          <Checkbox
+            checked={editDraft.suppressEmptyRunIssues}
+            onCheckedChange={(checked) =>
+              setEditDraft((current) => ({ ...current, suppressEmptyRunIssues: checked === true }))
+            }
+            aria-label="Hide empty routine runs"
+          />
+          <span className="space-y-1">
+            <span className="block text-sm font-medium">Hide empty routine runs</span>
+            <span className="block text-sm text-muted-foreground">
+              When an assigned agent completes a routine run with a no-op outcome, hide that execution issue from board lists while keeping the run audit record.
+            </span>
+          </span>
+        </label>
       </div>
       <NextFiresPreview
         triggers={routine.triggers}
