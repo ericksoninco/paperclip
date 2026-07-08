@@ -13,6 +13,7 @@ import {
   approvals,
   activityLog,
   companies,
+  executionWorkspaces,
   heartbeatRunEvents,
   heartbeatRunWatchdogDecisions,
   heartbeatRuns,
@@ -184,6 +185,12 @@ function summarizeRunFailureForIssueComment(run: LatestIssueRun) {
     return " Latest retry failure details were withheld from the issue thread; inspect the linked run for evidence.";
   }
   return null;
+}
+
+function isNotGitRepositoryAdapterFailure(latestRun: LatestIssueRun) {
+  const errorCode = readNonEmptyString(latestRun?.errorCode);
+  const error = readNonEmptyString(latestRun?.error)?.toLowerCase() ?? "";
+  return errorCode === "adapter_failed" && error.includes("not a git repository");
 }
 
 function buildExecutionReviewParticipantRecoveryComment(latestRun: LatestIssueRun) {
@@ -2131,6 +2138,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
   ) {
     const candidateIds: string[] = [];
     if (preferredOwnerAgentId) candidateIds.push(preferredOwnerAgentId);
+    if (issue.assigneeAgentId) candidateIds.push(issue.assigneeAgentId);
     if (issue.assigneeAgentId) {
       const assignee = await getAgent(issue.assigneeAgentId);
       if (assignee?.reportsTo) candidateIds.push(assignee.reportsTo);
@@ -2147,7 +2155,6 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       .where(and(eq(agents.companyId, issue.companyId), inArray(agents.role, ["cto", "ceo"])))
       .orderBy(sql`case when ${agents.role} = 'cto' then 0 else 1 end`, asc(agents.createdAt));
     candidateIds.push(...roleCandidates.map((agent) => agent.id));
-    if (issue.assigneeAgentId) candidateIds.push(issue.assigneeAgentId);
 
     const seen = new Set<string>();
     for (const agentId of candidateIds) {
@@ -2621,6 +2628,34 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     return existingUnresolvedBlockerIssues(companyId, issueId).then((rows) => rows.map((row) => row.id));
   }
 
+  async function shouldForceFreshWorkspaceForBrokenGitReuse(issue: typeof issues.$inferSelect, latestRun: LatestIssueRun) {
+    if (!isNotGitRepositoryAdapterFailure(latestRun)) return false;
+    if (issue.executionWorkspacePreference !== "reuse_existing" || !issue.executionWorkspaceId) return false;
+    const workspace = await db
+      .select({ strategyType: executionWorkspaces.strategyType })
+      .from(executionWorkspaces)
+      .where(and(eq(executionWorkspaces.companyId, issue.companyId), eq(executionWorkspaces.id, issue.executionWorkspaceId)))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    return workspace?.strategyType === "git_worktree";
+  }
+
+  async function forceFreshIsolatedWorkspaceForRecovery(issue: typeof issues.$inferSelect) {
+    const existingSettings = parseObject(issue.executionWorkspaceSettings);
+    await db
+      .update(issues)
+      .set({
+        executionWorkspaceId: null,
+        executionWorkspacePreference: null,
+        executionWorkspaceSettings: {
+          ...existingSettings,
+          mode: "isolated_workspace",
+        },
+        updatedAt: new Date(),
+      })
+      .where(and(eq(issues.companyId, issue.companyId), eq(issues.id, issue.id)));
+  }
+
   async function resolveContinuationWaitingOnReview(issue: typeof issues.$inferSelect) {
     const existingBlockers = await existingUnresolvedBlockerIssues(issue.companyId, issue.id);
     const openChildren = await db
@@ -2922,6 +2957,15 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       }
 
       const latestRun = await getLatestIssueRun(issue.companyId, issue.id);
+      const brokenGitReuse =
+        isUnsuccessfulTerminalIssueRun(latestRun) &&
+        (await shouldForceFreshWorkspaceForBrokenGitReuse(issue, latestRun));
+      let forcedFreshWorkspace = false;
+      const forceFreshWorkspaceBeforeRetry = async () => {
+        if (!brokenGitReuse || forcedFreshWorkspace) return;
+        await forceFreshIsolatedWorkspaceForRecovery(issue);
+        forcedFreshWorkspace = true;
+      };
       if (isStrandedIssueRecoveryIssue(issue) && isUnsuccessfulTerminalIssueRun(latestRun)) {
         const updated = await escalateStrandedRecoveryIssueInPlace({
           issue,
@@ -3196,6 +3240,29 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         continue;
       }
       if (isUnsuccessfulTerminalIssueRun(latestRun)) {
+        if (brokenGitReuse) {
+          if (await isInvocationBudgetBlocked(issue, agentId)) {
+            result.skipped += 1;
+            continue;
+          }
+          await forceFreshWorkspaceBeforeRetry();
+          const queued = await enqueueStrandedIssueRecovery({
+            issueId: issue.id,
+            agentId,
+            reason: "issue_continuation_needed",
+            retryReason: "issue_continuation_needed",
+            source: "issue.continuation_recovery",
+            retryOfRunId: latestRun?.id ?? issue.checkoutRunId ?? null,
+          });
+          if (queued) {
+            result.continuationRequeued += 1;
+            result.issueIds.push(issue.id);
+          } else {
+            result.skipped += 1;
+          }
+          continue;
+        }
+
         const classification = classifyContinuationFailure(latestRun);
 
         if (classification.errorCode === CONTINUATION_WAITING_ON_REVIEW_ERROR_CODE) {
