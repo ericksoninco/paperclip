@@ -393,12 +393,13 @@ describe("RoutineRunVariablesDialog", () => {
       );
     });
 
-    for (let i = 0; i < 10 && !document.querySelector('[data-testid="workspace-card"]'); i += 1) {
+    let branchInput: HTMLInputElement | undefined;
+    for (let i = 0; i < 10 && !branchInput; i += 1) {
       await settleEffects();
+      branchInput = Array.from(document.querySelectorAll("input"))
+        .find((input) => input.value === "pap-1634-routine-branch");
     }
 
-    const branchInput = Array.from(document.querySelectorAll("input"))
-      .find((input) => input.value === "pap-1634-routine-branch");
     expect(branchInput?.disabled).toBe(true);
     expect(document.body.textContent).not.toContain("Missing: workspaceBranch");
 

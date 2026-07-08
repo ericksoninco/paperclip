@@ -265,10 +265,10 @@ export function ScheduleEditor({
             value={customCron}
             onChange={(e) => {
               const nextCron = e.target.value;
+              const nextValidation = getScheduleCronValidation(nextCron);
               setCustomCron(nextCron);
-              if (getScheduleCronValidation(nextCron).valid) {
-                emitChange("custom", hour, minute, dayOfWeek, dayOfMonth, nextCron);
-              }
+              onValidityChange?.(nextValidation.valid);
+              emitChange("custom", hour, minute, dayOfWeek, dayOfMonth, nextCron);
             }}
             placeholder="0 10 * * *"
             aria-label="Cron expression"
