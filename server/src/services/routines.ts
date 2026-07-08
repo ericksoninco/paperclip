@@ -73,6 +73,7 @@ const LIVE_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"];
 const TERMINAL_ISSUE_STATUSES = new Set(["done", "cancelled"]);
 const MAX_CATCH_UP_RUNS = 25;
 const MAX_ROUTINE_REVISIONS = 100;
+type RoutineIssueOutcomeSignal = "noop";
 const WEEKDAY_INDEX: Record<string, number> = {
   Sun: 0,
   Mon: 1,
@@ -2814,7 +2815,10 @@ export function routineService(
       return { triggered };
     },
 
-    syncRunStatusForIssue: async (issueId: string) => {
+    syncRunStatusForIssue: async (
+      issueId: string,
+      options: { routineOutcome?: RoutineIssueOutcomeSignal } = {},
+    ) => {
       const issue = await db
         .select({
           id: issues.id,
@@ -2827,9 +2831,37 @@ export function routineService(
         .then((rows) => rows[0] ?? null);
       if (!issue || issue.originKind !== "routine_execution" || !issue.originRunId) return null;
       if (issue.status === "done") {
-        return finalizeRun(issue.originRunId, {
-          status: "completed",
-          completedAt: new Date(),
+        return db.transaction(async (tx) => {
+          const txDb = tx as unknown as Db;
+          const completedAt = new Date();
+          if (options.routineOutcome !== "noop") {
+            return finalizeRun(issue.originRunId!, {
+              status: "completed",
+              completedAt,
+            }, txDb);
+          }
+
+          const runContext = await txDb
+            .select({
+              suppressEmptyRunIssues: routines.suppressEmptyRunIssues,
+            })
+            .from(routineRuns)
+            .innerJoin(routines, eq(routines.id, routineRuns.routineId))
+            .where(eq(routineRuns.id, issue.originRunId!))
+            .then((rows) => rows[0] ?? null);
+
+          if (runContext?.suppressEmptyRunIssues) {
+            await txDb
+              .update(issues)
+              .set({ hiddenAt: completedAt, updatedAt: completedAt })
+              .where(eq(issues.id, issue.id));
+          }
+
+          return finalizeRun(issue.originRunId!, {
+            status: "completed",
+            completedAt,
+            executionOutcome: runContext?.suppressEmptyRunIssues ? "empty" : "worked",
+          }, txDb);
         });
       }
       if (issue.status === "blocked" || issue.status === "cancelled") {

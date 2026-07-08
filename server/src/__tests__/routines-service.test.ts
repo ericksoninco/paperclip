@@ -739,6 +739,70 @@ describeEmbeddedPostgres("routine service live-execution coalescing", () => {
     expect(inboxIssues.map((issue) => issue.id)).toContain(run.linkedIssueId);
   });
 
+  it("hides noop routine execution issues only when the routine opts in", async () => {
+    const { routine, svc } = await seedFixture();
+    await db
+      .update(routines)
+      .set({ suppressEmptyRunIssues: true })
+      .where(eq(routines.id, routine.id));
+
+    const run = await svc.runRoutine(routine.id, { source: "manual" });
+    expect(run.linkedIssueId).toBeTruthy();
+    await db
+      .update(issues)
+      .set({ status: "done" })
+      .where(eq(issues.id, run.linkedIssueId!));
+
+    await svc.syncRunStatusForIssue(run.linkedIssueId!, { routineOutcome: "noop" });
+
+    const [finalIssue] = await db
+      .select({ hiddenAt: issues.hiddenAt })
+      .from(issues)
+      .where(eq(issues.id, run.linkedIssueId!));
+    const [finalRun] = await db
+      .select({
+        status: routineRuns.status,
+        executionOutcome: routineRuns.executionOutcome,
+      })
+      .from(routineRuns)
+      .where(eq(routineRuns.id, run.id));
+    expect(finalIssue?.hiddenAt).toBeInstanceOf(Date);
+    expect(finalRun).toMatchObject({
+      status: "completed",
+      executionOutcome: "empty",
+    });
+  });
+
+  it("records worked outcome without hiding noop routine issues when suppression is off", async () => {
+    const { routine, svc } = await seedFixture();
+
+    const run = await svc.runRoutine(routine.id, { source: "manual" });
+    expect(run.linkedIssueId).toBeTruthy();
+    await db
+      .update(issues)
+      .set({ status: "done" })
+      .where(eq(issues.id, run.linkedIssueId!));
+
+    await svc.syncRunStatusForIssue(run.linkedIssueId!, { routineOutcome: "noop" });
+
+    const [finalIssue] = await db
+      .select({ hiddenAt: issues.hiddenAt })
+      .from(issues)
+      .where(eq(issues.id, run.linkedIssueId!));
+    const [finalRun] = await db
+      .select({
+        status: routineRuns.status,
+        executionOutcome: routineRuns.executionOutcome,
+      })
+      .from(routineRuns)
+      .where(eq(routineRuns.id, run.id));
+    expect(finalIssue?.hiddenAt).toBeNull();
+    expect(finalRun).toMatchObject({
+      status: "completed",
+      executionOutcome: "worked",
+    });
+  });
+
   it("uses the routine revision responsible-user snapshot for automatic runs", async () => {
     const { companyId, agentId, projectId, svc } = await seedFixture();
     const responsibleUserId = randomUUID();

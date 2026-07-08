@@ -82,6 +82,9 @@ const mockIssueRecoveryActionService = vi.hoisted(() => ({
   listActiveForIssues: vi.fn(async () => new Map()),
   resolveActiveForIssue: vi.fn(async () => null),
 }));
+const mockRoutineService = vi.hoisted(() => ({
+  syncRunStatusForIssue: vi.fn(async () => undefined),
+}));
 const mockTaskWatchdogService = vi.hoisted(() => ({
   getActiveForIssue: vi.fn(async () => null),
   revalidateMutationScope: vi.fn(async () => ({
@@ -219,9 +222,7 @@ function registerRouteMocks() {
     taskWatchdogService: () => mockTaskWatchdogService,
     logActivity: mockLogActivity,
     projectService: () => ({}),
-    routineService: () => ({
-      syncRunStatusForIssue: vi.fn(async () => undefined),
-    }),
+    routineService: () => mockRoutineService,
     workProductService: () => mockWorkProductService,
   }));
 }
@@ -476,6 +477,8 @@ describe("agent issue mutation checkout ownership", () => {
     mockTaskWatchdogService.upsertForIssue.mockReset();
     mockTaskWatchdogService.disableForIssue.mockReset();
     mockTaskWatchdogService.disableForIssue.mockResolvedValue(null);
+    mockRoutineService.syncRunStatusForIssue.mockReset();
+    mockRoutineService.syncRunStatusForIssue.mockResolvedValue(undefined);
     mockHeartbeatService.wakeup.mockReset();
     mockHeartbeatService.wakeup.mockResolvedValue(undefined);
     mockHeartbeatService.reportRunActivity.mockReset();
@@ -964,6 +967,37 @@ describe("agent issue mutation checkout ownership", () => {
         lockedDocumentStrategy: "create_new_document",
       }),
     );
+  });
+
+  it("passes routine noop outcomes only for the assigned routine execution agent", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue({
+      originKind: "routine_execution",
+      originRunId: "88888888-8888-4888-8888-888888888888",
+    }));
+    const app = await createApp(ownerActor());
+
+    await request(app)
+      .patch(`/api/issues/${issueId}`)
+      .send({ status: "done", routineOutcome: "noop" })
+      .expect(200);
+
+    expect(mockIssueService.update).toHaveBeenCalledWith(
+      issueId,
+      expect.objectContaining({ status: "done" }),
+    );
+    expect(mockRoutineService.syncRunStatusForIssue).toHaveBeenCalledWith(issueId, { routineOutcome: "noop" });
+  });
+
+  it("rejects routine noop outcomes on non-routine issues", async () => {
+    const app = await createApp(ownerActor());
+
+    await request(app)
+      .patch(`/api/issues/${issueId}`)
+      .send({ status: "done", routineOutcome: "noop" })
+      .expect(422);
+
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+    expect(mockRoutineService.syncRunStatusForIssue).not.toHaveBeenCalled();
   });
 
   it("stores the authenticated agent run id when creating work products", async () => {

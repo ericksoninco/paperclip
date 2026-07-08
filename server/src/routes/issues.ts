@@ -6954,6 +6954,7 @@ export function issueRoutes(
       resume: resumeRequested,
       interrupt: interruptRequested,
       hiddenAt: hiddenAtRaw,
+      routineOutcome,
       ...updateFields
     } = req.body;
     const shouldCancelActiveRunForCancelledStatus =
@@ -6961,6 +6962,16 @@ export function issueRoutes(
     if (resumeRequested === true && !commentBody) {
       res.status(400).json({ error: "Follow-up intent requires a comment" });
       return;
+    }
+    if (routineOutcome !== undefined) {
+      if (existing.originKind !== "routine_execution") {
+        res.status(422).json({ error: "routineOutcome is only supported on routine execution issues" });
+        return;
+      }
+      if (req.actor.type !== "agent" || existing.assigneeAgentId !== req.actor.agentId) {
+        res.status(403).json({ error: "Only the assigned agent can report a routine outcome" });
+        return;
+      }
     }
     if (
       (reopenRequested === true ||
@@ -7359,7 +7370,7 @@ export function issueRoutes(
         blocks: updatedRelations.blocks,
       };
     }
-    await routinesSvc.syncRunStatusForIssue(issue.id);
+    await routinesSvc.syncRunStatusForIssue(issue.id, routineOutcome === undefined ? undefined : { routineOutcome });
 
     if (actor.runId) {
       await heartbeat.reportRunActivity(actor.runId).catch((err) =>
