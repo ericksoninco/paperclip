@@ -1016,6 +1016,23 @@ describe("agent issue mutation checkout ownership", () => {
     expect(mockRoutineService.syncRunStatusForIssue).not.toHaveBeenCalled();
   });
 
+  it("rejects routine noop outcomes from non-owner agents", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue({
+      assigneeAgentId: null,
+      originKind: "routine_execution",
+      originRunId: "88888888-8888-4888-8888-888888888888",
+    }));
+    const app = await createApp(peerActor());
+
+    await request(app)
+      .patch(`/api/issues/${issueId}`)
+      .send({ status: "done", routineOutcome: "noop" })
+      .expect(403);
+
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+    expect(mockRoutineService.syncRunStatusForIssue).not.toHaveBeenCalled();
+  });
+
   it("rejects routine noop outcomes unless the issue is being marked done", async () => {
     mockIssueService.getById.mockResolvedValue(makeIssue({
       originKind: "routine_execution",
@@ -1023,11 +1040,12 @@ describe("agent issue mutation checkout ownership", () => {
     }));
     const app = await createApp(ownerActor());
 
-    await request(app)
+    const res = await request(app)
       .patch(`/api/issues/${issueId}`)
       .send({ status: "in_progress", routineOutcome: "noop" })
       .expect(422);
 
+    expect(res.body.error).toBe("routineOutcome is only supported when completing a routine execution issue");
     expect(mockIssueService.update).not.toHaveBeenCalled();
     expect(mockRoutineService.syncRunStatusForIssue).not.toHaveBeenCalled();
   });

@@ -6968,6 +6968,10 @@ export function issueRoutes(
         res.status(422).json({ error: "routineOutcome is only supported on routine execution issues" });
         return;
       }
+      if (updateFields.status !== "done") {
+        res.status(422).json({ error: "routineOutcome is only supported when completing a routine execution issue" });
+        return;
+      }
       if (req.actor.type !== "agent" || existing.assigneeAgentId !== req.actor.agentId) {
         res.status(403).json({ error: "Only the assigned agent can report a routine outcome" });
         return;
