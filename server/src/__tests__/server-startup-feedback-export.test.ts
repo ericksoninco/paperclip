@@ -23,6 +23,7 @@ const {
   resolveHeartbeatSchedulingSuppressionMock,
   routineServiceFactoryMock,
   routineServiceMock,
+  secretServiceFactoryMock,
 } = vi.hoisted(() => {
   const createAppMock = vi.fn(async () => ((_: unknown, __: unknown) => {}) as never);
   const createBetterAuthInstanceMock = vi.fn(() => ({}));
@@ -62,6 +63,15 @@ const {
     tickScheduledTriggers: vi.fn(async () => ({ triggered: 0 })),
   };
   const routineServiceFactoryMock = vi.fn(() => routineServiceMock);
+  const secretServiceMock = {
+    selfCheckLocalEncrypted: vi.fn(async () => ({
+      provider: "local_encrypted",
+      status: "ok",
+      message: "Local encrypted provider self-check skipped in startup test.",
+      details: { skipped: true },
+    })),
+  };
+  const secretServiceFactoryMock = vi.fn(() => secretServiceMock);
   const resolveHeartbeatSchedulingSuppressionMock = vi.fn(() => ({
     suppressed: false,
     reason: null,
@@ -98,6 +108,8 @@ const {
     resolveHeartbeatSchedulingSuppressionMock,
     routineServiceFactoryMock,
     routineServiceMock,
+    secretServiceFactoryMock,
+    secretServiceMock,
   };
 });
 
@@ -220,6 +232,7 @@ vi.mock("../services/index.js", () => ({
   reconcilePersistedRuntimeServicesOnStartup: vi.fn(async () => ({ reconciled: 0 })),
   resolveHeartbeatSchedulingSuppression: resolveHeartbeatSchedulingSuppressionMock,
   routineService: routineServiceFactoryMock,
+  secretService: secretServiceFactoryMock,
 }));
 
 vi.mock("../storage/index.js", () => ({

@@ -944,6 +944,91 @@ export function secretService(db: Db) {
     };
   }
 
+  async function selfCheckLocalEncrypted(companyId?: string): Promise<SecretProviderHealthCheck> {
+    if (process.env.PAPERCLIP_SECRETS_PROVIDER !== "local_encrypted") {
+      return {
+        provider: "local_encrypted",
+        status: "ok",
+        message: "Local encrypted provider self-check skipped because it is not the active provider.",
+        details: { skipped: true, reason: "provider_inactive" },
+      };
+    }
+
+    const candidate = await db
+      .select({
+        companyId: companySecrets.companyId,
+        secretId: companySecrets.id,
+        secretKey: companySecrets.key,
+        version: companySecretVersions.version,
+        material: companySecretVersions.material,
+        externalRef: companySecrets.externalRef,
+        providerVersionRef: companySecretVersions.providerVersionRef,
+      })
+      .from(companySecrets)
+      .innerJoin(
+        companySecretVersions,
+        and(
+          eq(companySecretVersions.secretId, companySecrets.id),
+          eq(companySecretVersions.version, companySecrets.latestVersion),
+        ),
+      )
+      .where(
+        and(
+          companyId ? eq(companySecrets.companyId, companyId) : undefined,
+          eq(companySecrets.provider, "local_encrypted"),
+          eq(companySecrets.status, "active"),
+          eq(companySecretVersions.status, "current"),
+          sql`${companySecretVersions.material}->>'scheme' = 'local_encrypted_v1'`,
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+
+    if (!candidate) {
+      return {
+        provider: "local_encrypted",
+        status: "ok",
+        message: "Local encrypted provider self-check skipped because no active local encrypted secrets exist.",
+        details: { skipped: true, reason: "no_local_encrypted_secrets" },
+      };
+    }
+
+    try {
+      await getSecretProvider("local_encrypted").resolveVersion({
+        material: candidate.material as Record<string, unknown>,
+        externalRef: candidate.externalRef,
+        providerVersionRef: candidate.providerVersionRef,
+        context: {
+          companyId: candidate.companyId,
+          secretId: candidate.secretId,
+          secretKey: candidate.secretKey,
+          version: candidate.version,
+        },
+      });
+      return {
+        provider: "local_encrypted",
+        status: "ok",
+        message: "Local encrypted provider self-check decrypted an existing secret successfully.",
+        details: { checkedSecretId: candidate.secretId, checkedVersion: candidate.version },
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        provider: "local_encrypted",
+        status: "error",
+        message:
+          "SECRETS KEY MISMATCH: configured master key cannot decrypt existing secrets. " +
+          "Connectors will fail until the correct key is restored.",
+        warnings: [message],
+        details: {
+          code: "local_encrypted_key_mismatch",
+          checkedSecretId: candidate.secretId,
+          checkedVersion: candidate.version,
+        },
+      };
+    }
+  }
+
   async function resolveSecretValueInternal(
     companyId: string,
     secretId: string,
@@ -1888,7 +1973,27 @@ export function secretService(db: Db) {
   return {
     listProviders: () => listSecretProviders(),
 
-    checkProviders: () => checkSecretProviders(),
+    checkProviders: async (companyId?: string) => {
+      const checks = await checkSecretProviders();
+      const selfCheck = await selfCheckLocalEncrypted(companyId);
+      if (selfCheck.details?.skipped === true) return checks;
+      return checks.map((check) =>
+        check.provider === "local_encrypted" && selfCheck.status !== "ok"
+          ? {
+              ...check,
+              status: selfCheck.status,
+              message: selfCheck.message,
+              warnings: [
+                ...(check.warnings ?? []),
+                ...(selfCheck.warnings ?? []),
+              ],
+              details: { ...(check.details ?? {}), ...(selfCheck.details ?? {}) },
+            }
+          : check,
+      );
+    },
+
+    selfCheckLocalEncrypted,
 
     previewProviderConfigDiscovery: async (
       companyId: string,

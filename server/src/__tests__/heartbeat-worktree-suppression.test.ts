@@ -41,17 +41,31 @@ describeEmbeddedPostgres("heartbeat worktree suppression", () => {
     db = createDb(tempDb.connectionString);
   }, 20_000);
 
+  async function deleteHeartbeatRunsAndEvents() {
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        await db.delete(heartbeatRunEvents);
+        await db.delete(heartbeatRuns);
+        return;
+      } catch (error) {
+        lastError = error;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    throw lastError;
+  }
+
   afterEach(async () => {
-    await db.delete(heartbeatRunEvents);
     await db.delete(issueComments);
     await db.delete(issueDocuments);
     await db.delete(documentRevisions);
     await db.delete(documents);
     await db.delete(activityLog);
-    await db.delete(heartbeatRuns);
+    await db.delete(agentRuntimeState);
+    await deleteHeartbeatRunsAndEvents();
     await db.delete(agentWakeupRequests);
     await db.delete(issues);
-    await db.delete(agentRuntimeState);
     await db.delete(companySkills);
     await db.delete(agents);
     await db.delete(companies);
@@ -234,6 +248,7 @@ describeEmbeddedPostgres("heartbeat worktree suppression", () => {
     const runCount = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, run!.id))
       .then((rows) => rows[0]?.count ?? 0);
     expect(runCount).toBe(1);
 

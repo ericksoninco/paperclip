@@ -81,6 +81,7 @@ describe("secret routes", () => {
     const res = await request(createApp()).get("/api/companies/company-1/secret-providers/health");
 
     expect(res.status).toBe(200);
+    expect(mockSecretService.checkProviders).toHaveBeenCalledWith("company-1");
     expect(res.body).toEqual({
       providers: [
         {

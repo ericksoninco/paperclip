@@ -71,7 +71,7 @@ export function secretRoutes(db: Db) {
     assertBoard(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const checks = await svc.checkProviders();
+    const checks = await svc.checkProviders(companyId);
     res.json({ providers: checks });
   });
 
