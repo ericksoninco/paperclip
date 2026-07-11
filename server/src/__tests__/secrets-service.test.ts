@@ -131,6 +131,47 @@ describeEmbeddedPostgres("secretService", () => {
     }
   });
 
+  it("scopes local encrypted self-check candidates to the requested company", async () => {
+    const originalProvider = process.env.PAPERCLIP_SECRETS_PROVIDER;
+    const originalKeyFile = process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE;
+    const correctKeyFile = path.join(secretsTmpDir, "master.key");
+    const wrongKeyFile = path.join(secretsTmpDir, `wrong-${randomUUID()}.key`);
+    process.env.PAPERCLIP_SECRETS_PROVIDER = "local_encrypted";
+    process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = correctKeyFile;
+
+    try {
+      const companyA = await seedCompany("A");
+      const companyB = await seedCompany("B");
+      const svc = secretService(db);
+      const companyBSecret = await svc.create(companyB, {
+        name: `foreign-self-check-${randomUUID()}`,
+        provider: "local_encrypted",
+        value: "foreign-secret-value",
+      });
+      writeFileSync(wrongKeyFile, randomBytes(32).toString("base64"), { encoding: "utf8", mode: 0o600 });
+      process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = wrongKeyFile;
+
+      await expect(svc.selfCheckLocalEncrypted(companyA)).resolves.toMatchObject({
+        provider: "local_encrypted",
+        status: "ok",
+        details: { skipped: true, reason: "no_local_encrypted_secrets" },
+      });
+      await expect(svc.selfCheckLocalEncrypted(companyB)).resolves.toMatchObject({
+        provider: "local_encrypted",
+        status: "error",
+        details: {
+          code: "local_encrypted_key_mismatch",
+          checkedSecretId: companyBSecret.id,
+        },
+      });
+    } finally {
+      if (originalProvider === undefined) delete process.env.PAPERCLIP_SECRETS_PROVIDER;
+      else process.env.PAPERCLIP_SECRETS_PROVIDER = originalProvider;
+      if (originalKeyFile === undefined) delete process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE;
+      else process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = originalKeyFile;
+    }
+  });
+
   it("rejects cross-company secret references during env normalization", async () => {
     const companyA = await seedCompany("A");
     const companyB = await seedCompany("B");

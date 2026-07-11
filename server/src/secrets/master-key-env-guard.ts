@@ -54,9 +54,12 @@ export function evaluateSecretsMasterKeyEnv(input: {
     return { action: "keep", resolvedPath: resolvedFromEnv };
   }
 
-  const reason = isLikelyTransientWorktreeKeyPath(resolvedFromEnv)
-    ? "PAPERCLIP_SECRETS_MASTER_KEY_FILE points at a transient worktree/rebalance key outside the active instance root"
-    : "PAPERCLIP_SECRETS_MASTER_KEY_FILE points outside the active instance root";
+  if (!isLikelyTransientWorktreeKeyPath(resolvedFromEnv)) {
+    return { action: "keep", resolvedPath: resolvedFromEnv };
+  }
+
+  const reason =
+    "PAPERCLIP_SECRETS_MASTER_KEY_FILE points at a transient worktree/rebalance key outside the active instance root";
   if (input.strict) {
     return { action: "refuse", from: resolvedFromEnv, reason };
   }

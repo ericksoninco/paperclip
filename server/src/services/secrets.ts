@@ -944,7 +944,7 @@ export function secretService(db: Db) {
     };
   }
 
-  async function selfCheckLocalEncrypted(): Promise<SecretProviderHealthCheck> {
+  async function selfCheckLocalEncrypted(companyId?: string): Promise<SecretProviderHealthCheck> {
     if (process.env.PAPERCLIP_SECRETS_PROVIDER !== "local_encrypted") {
       return {
         provider: "local_encrypted",
@@ -974,6 +974,7 @@ export function secretService(db: Db) {
       )
       .where(
         and(
+          companyId ? eq(companySecrets.companyId, companyId) : undefined,
           eq(companySecrets.provider, "local_encrypted"),
           eq(companySecrets.status, "active"),
           eq(companySecretVersions.status, "current"),
@@ -1972,9 +1973,9 @@ export function secretService(db: Db) {
   return {
     listProviders: () => listSecretProviders(),
 
-    checkProviders: async () => {
+    checkProviders: async (companyId?: string) => {
       const checks = await checkSecretProviders();
-      const selfCheck = await selfCheckLocalEncrypted();
+      const selfCheck = await selfCheckLocalEncrypted(companyId);
       if (selfCheck.details?.skipped === true) return checks;
       return checks.map((check) =>
         check.provider === "local_encrypted" && selfCheck.status !== "ok"

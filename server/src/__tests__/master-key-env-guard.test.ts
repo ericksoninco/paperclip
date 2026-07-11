@@ -47,12 +47,12 @@ describe("evaluateSecretsMasterKeyEnv", () => {
     });
   });
 
-  it("refuses outside-instance key paths in strict mode", () => {
+  it("keeps explicit custom outside-instance key paths in strict mode", () => {
     expect(evaluate({
       PAPERCLIP_SECRETS_MASTER_KEY_FILE: "/other/instance/secrets/master.key",
     }, true)).toMatchObject({
-      action: "refuse",
-      from: "/other/instance/secrets/master.key",
+      action: "keep",
+      resolvedPath: "/other/instance/secrets/master.key",
     });
   });
 
@@ -75,13 +75,21 @@ describe("evaluateSecretsMasterKeyEnv", () => {
     });
   });
 
-  it("overrides a plain outside-instance-root key path in non-strict mode", () => {
+  it("keeps a plain outside-instance-root key path as an explicit custom override", () => {
     expect(evaluate({
       PAPERCLIP_SECRETS_MASTER_KEY_FILE: "/other/instance/secrets/master.key",
     })).toMatchObject({
-      action: "override",
-      from: "/other/instance/secrets/master.key",
-      resolvedPath: "/home/me/.paperclip/instances/default/secrets/master.key",
+      action: "keep",
+      resolvedPath: "/other/instance/secrets/master.key",
+    });
+  });
+
+  it("keeps mounted container secret key files outside the instance root", () => {
+    expect(evaluate({
+      PAPERCLIP_SECRETS_MASTER_KEY_FILE: "/run/secrets/paperclip-master.key",
+    }, true)).toMatchObject({
+      action: "keep",
+      resolvedPath: "/run/secrets/paperclip-master.key",
     });
   });
 
