@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { mkdirSync, rmSync } from "node:fs";
+import { randomBytes, randomUUID } from "node:crypto";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -98,6 +98,38 @@ describeEmbeddedPostgres("secretService", () => {
       updatedAt: new Date(),
     });
   }
+
+  it("reports a startup self-check error when the configured local master key cannot decrypt existing secrets", async () => {
+    const originalProvider = process.env.PAPERCLIP_SECRETS_PROVIDER;
+    const originalKeyFile = process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE;
+    const correctKeyFile = path.join(secretsTmpDir, "master.key");
+    const wrongKeyFile = path.join(secretsTmpDir, `wrong-${randomUUID()}.key`);
+    process.env.PAPERCLIP_SECRETS_PROVIDER = "local_encrypted";
+    process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = correctKeyFile;
+
+    try {
+      const companyId = await seedCompany();
+      const svc = secretService(db);
+      await svc.create(companyId, {
+        name: `self-check-${randomUUID()}`,
+        provider: "local_encrypted",
+        value: "expected-secret-value",
+      });
+      writeFileSync(wrongKeyFile, randomBytes(32).toString("base64"), { encoding: "utf8", mode: 0o600 });
+      process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = wrongKeyFile;
+
+      await expect(svc.selfCheckLocalEncrypted()).resolves.toMatchObject({
+        provider: "local_encrypted",
+        status: "error",
+        details: { code: "local_encrypted_key_mismatch" },
+      });
+    } finally {
+      if (originalProvider === undefined) delete process.env.PAPERCLIP_SECRETS_PROVIDER;
+      else process.env.PAPERCLIP_SECRETS_PROVIDER = originalProvider;
+      if (originalKeyFile === undefined) delete process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE;
+      else process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = originalKeyFile;
+    }
+  });
 
   it("rejects cross-company secret references during env normalization", async () => {
     const companyA = await seedCompany("A");

@@ -45,7 +45,7 @@ function decodeMasterKey(raw: string): Buffer | null {
   return null;
 }
 
-function loadOrCreateMasterKey(): Buffer {
+function loadMasterKeyFromInlineEnv(): Buffer | null {
   const envKeyRaw = process.env.PAPERCLIP_SECRETS_MASTER_KEY;
   if (envKeyRaw && envKeyRaw.trim().length > 0) {
     const fromEnv = decodeMasterKey(envKeyRaw);
@@ -56,6 +56,32 @@ function loadOrCreateMasterKey(): Buffer {
     }
     return fromEnv;
   }
+  return null;
+}
+
+function loadMasterKeyForRead(): Buffer {
+  const fromEnv = loadMasterKeyFromInlineEnv();
+  if (fromEnv) return fromEnv;
+
+  const keyPath = resolveMasterKeyFilePath();
+  if (!existsSync(keyPath)) {
+    throw new Error(
+      `Secrets master key file not found at ${keyPath}; refusing to mint a new key on the decrypt path.`,
+    );
+  }
+
+  enforceKeyFilePermissionsBestEffort(keyPath);
+  const raw = readFileSync(keyPath, "utf8");
+  const decoded = decodeMasterKey(raw);
+  if (!decoded) {
+    throw badRequest(`Invalid secrets master key at ${keyPath}`);
+  }
+  return decoded;
+}
+
+function loadMasterKeyForWrite(): Buffer {
+  const fromEnv = loadMasterKeyFromInlineEnv();
+  if (fromEnv) return fromEnv;
 
   const keyPath = resolveMasterKeyFilePath();
   if (existsSync(keyPath)) {
@@ -96,7 +122,7 @@ function sha256Hex(value: string): string {
 }
 
 function prepareManagedVersion(value: string): PreparedSecretVersion {
-  const masterKey = loadOrCreateMasterKey();
+  const masterKey = loadMasterKeyForWrite();
   const valueSha256 = sha256Hex(value);
   return {
     material: encryptValue(masterKey, value),
@@ -272,7 +298,7 @@ export const localEncryptedProvider: SecretProviderModule = {
     throw badRequest("local_encrypted does not support external reference secrets");
   },
   async resolveVersion(input) {
-    const masterKey = loadOrCreateMasterKey();
+    const masterKey = loadMasterKeyForRead();
     return decryptValue(masterKey, asLocalEncryptedMaterial(input.material));
   },
   async deleteOrArchive() {

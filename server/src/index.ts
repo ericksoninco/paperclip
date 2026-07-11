@@ -47,6 +47,7 @@ import {
   reconcilePersistedRuntimeServicesOnStartup,
   resolveHeartbeatSchedulingSuppression,
   routineService,
+  secretService,
 } from "./services/index.js";
 import {
   parseAdapterRegistryEnv,
@@ -61,6 +62,8 @@ import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
 import { initTelemetry, getTelemetryClient } from "./telemetry.js";
 import { conflict } from "./errors.js";
+import { resolvePaperclipInstanceRoot } from "./home-paths.js";
+import { evaluateSecretsMasterKeyEnv } from "./secrets/master-key-env-guard.js";
 import type {
   InstanceDatabaseBackupRunResult,
   InstanceDatabaseBackupTrigger,
@@ -115,8 +118,33 @@ export async function startServer(): Promise<StartedServer> {
   if (process.env.PAPERCLIP_SECRETS_STRICT_MODE === undefined) {
     process.env.PAPERCLIP_SECRETS_STRICT_MODE = config.secretsStrictMode ? "true" : "false";
   }
-  if (process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE === undefined) {
-    process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = config.secretsMasterKeyFilePath;
+  const masterKeyEnvDecision = evaluateSecretsMasterKeyEnv({
+    env: process.env,
+    instanceKeyFilePath: config.secretsMasterKeyFilePath,
+    instanceRoot: resolvePaperclipInstanceRoot(),
+    strict: config.secretsStrictMode,
+  });
+  if (masterKeyEnvDecision.action === "set") {
+    process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = masterKeyEnvDecision.resolvedPath;
+  } else if (masterKeyEnvDecision.action === "override") {
+    logger.warn(
+      {
+        from: masterKeyEnvDecision.from,
+        to: masterKeyEnvDecision.resolvedPath,
+        reason: masterKeyEnvDecision.reason,
+      },
+      "Overriding stale PAPERCLIP_SECRETS_MASTER_KEY_FILE with the active instance secrets key path",
+    );
+    process.env.PAPERCLIP_SECRETS_MASTER_KEY_FILE = masterKeyEnvDecision.resolvedPath;
+  } else if (masterKeyEnvDecision.action === "refuse") {
+    logger.error(
+      {
+        from: masterKeyEnvDecision.from,
+        reason: masterKeyEnvDecision.reason,
+      },
+      "Refusing to start with unsafe PAPERCLIP_SECRETS_MASTER_KEY_FILE",
+    );
+    throw new Error(`${masterKeyEnvDecision.reason}: ${masterKeyEnvDecision.from}`);
   }
   
   type MigrationSummary =
@@ -514,6 +542,19 @@ export async function startServer(): Promise<StartedServer> {
         throw new Error("authenticated public exposure requires auth.publicBaseUrl");
       }
     }
+  }
+
+  const secretsSelfCheck = await secretService(db as any).selfCheckLocalEncrypted();
+  if (secretsSelfCheck.status === "error") {
+    logger.error(
+      { details: secretsSelfCheck.details, warnings: secretsSelfCheck.warnings },
+      secretsSelfCheck.message,
+    );
+    if (config.secretsStrictMode) {
+      throw new Error(secretsSelfCheck.message);
+    }
+  } else if (secretsSelfCheck.details?.skipped !== true) {
+    logger.info({ details: secretsSelfCheck.details }, secretsSelfCheck.message);
   }
 
   const requestedListenPort = config.port;
