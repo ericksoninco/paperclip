@@ -55,4 +55,57 @@ describe("evaluateSecretsMasterKeyEnv", () => {
       from: "/other/instance/secrets/master.key",
     });
   });
+
+  it("overrides a bare /var/folders temp key path in non-strict mode", () => {
+    expect(evaluate({
+      PAPERCLIP_SECRETS_MASTER_KEY_FILE: "/var/folders/ab/cd/T/paperclip-temp/secrets/master.key",
+    })).toMatchObject({
+      action: "override",
+      from: "/var/folders/ab/cd/T/paperclip-temp/secrets/master.key",
+      resolvedPath: "/home/me/.paperclip/instances/default/secrets/master.key",
+    });
+  });
+
+  it("overrides a standalone .paperclip-worktrees key path in non-strict mode", () => {
+    expect(evaluate({
+      PAPERCLIP_SECRETS_MASTER_KEY_FILE: "/data/.paperclip-worktrees/instances/old/secrets/master.key",
+    })).toMatchObject({
+      action: "override",
+      resolvedPath: "/home/me/.paperclip/instances/default/secrets/master.key",
+    });
+  });
+
+  it("overrides a plain outside-instance-root key path in non-strict mode", () => {
+    expect(evaluate({
+      PAPERCLIP_SECRETS_MASTER_KEY_FILE: "/other/instance/secrets/master.key",
+    })).toMatchObject({
+      action: "override",
+      from: "/other/instance/secrets/master.key",
+      resolvedPath: "/home/me/.paperclip/instances/default/secrets/master.key",
+    });
+  });
+
+  it("refuses a transient worktree/rebalance key path in strict mode", () => {
+    const stalePath = path.join(os.tmpdir(), "paperclip-worktree-rebalance-abc", ".paperclip-worktrees", "instances", "old", "secrets", "master.key");
+    expect(evaluate({
+      PAPERCLIP_SECRETS_MASTER_KEY_FILE: stalePath,
+    }, true)).toMatchObject({
+      action: "refuse",
+      from: path.resolve(stalePath),
+    });
+  });
+
+  it("reproduces the 2026-07-07 outage path: overrides the stale rebalance key (non-strict) and refuses it (strict)", () => {
+    const outagePath =
+      "/var/folders/j2/xxxx/T/paperclip-worktree-rebalance-1720000000/.paperclip-worktrees/instances/pap-884-abc/secrets/master.key";
+    expect(evaluate({ PAPERCLIP_SECRETS_MASTER_KEY_FILE: outagePath })).toMatchObject({
+      action: "override",
+      from: outagePath,
+      resolvedPath: "/home/me/.paperclip/instances/default/secrets/master.key",
+    });
+    expect(evaluate({ PAPERCLIP_SECRETS_MASTER_KEY_FILE: outagePath }, true)).toMatchObject({
+      action: "refuse",
+      from: outagePath,
+    });
+  });
 });
