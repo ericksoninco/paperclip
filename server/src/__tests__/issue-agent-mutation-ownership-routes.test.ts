@@ -241,6 +241,7 @@ function makeIssue(overrides: Record<string, unknown> = {}) {
     createdByUserId: "board-user",
     identifier: "PAP-1649",
     title: "Owned active issue",
+    appendPolicy: "owner_only",
     executionPolicy: null,
     executionState: null,
     hiddenAt: null,
@@ -807,6 +808,49 @@ describe("agent issue mutation checkout ownership", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(403);
     expect(res.body.error).toBe("Issue is outside this actor's authorization boundary");
     expect(mockIssueService.addComment).not.toHaveBeenCalled();
+  });
+
+  it("allows non-owner agents to append comments to append-open done issues", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue({
+      status: "done",
+      assigneeAgentId: ownerAgentId,
+      appendPolicy: "comment_append_open",
+    }));
+    mockAccessService.decide.mockImplementation(async (input: { action: string }) => ({
+      allowed: input.action === "issue:read",
+      action: input.action,
+      reason: input.action === "issue:read" ? "allow_explicit_grant" : "deny_missing_grant",
+      explanation: input.action === "issue:read" ? "Allowed by test read grant." : "Missing permission.",
+    }));
+
+    const res = await request(await createApp(peerActor()))
+      .post(`/api/issues/${issueId}/comments`)
+      .send({ body: "Shared log append." });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockIssueService.addComment).toHaveBeenCalledWith(
+      issueId,
+      "Shared log append.",
+      expect.any(Object),
+      expect.any(Object),
+    );
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+  });
+
+  it("keeps field mutations denied for non-owner agents on append-open issues", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue({
+      status: "done",
+      assigneeAgentId: ownerAgentId,
+      appendPolicy: "comment_append_open",
+    }));
+
+    const res = await request(await createApp(peerActor()))
+      .patch(`/api/issues/${issueId}`)
+      .send({ status: "todo" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toBe("Agent cannot mutate another agent's issue");
+    expect(mockIssueService.update).not.toHaveBeenCalled();
   });
 
   it("rejects peer agents from listing comments when issue read is outside their boundary", async () => {

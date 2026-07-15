@@ -66,6 +66,21 @@ describe("issue validators", () => {
     expect(updated).not.toHaveProperty("responsibleUserId");
   });
 
+  it("validates issue append policy on create and update", () => {
+    expect(createIssueSchema.parse({
+      title: "Shared log",
+      appendPolicy: "comment_append_open",
+    }).appendPolicy).toBe("comment_append_open");
+
+    expect(updateIssueSchema.parse({
+      appendPolicy: "comment_append_open",
+    }).appendPolicy).toBe("comment_append_open");
+
+    expect(updateIssueSchema.safeParse({
+      appendPolicy: "world_writable",
+    }).success).toBe(false);
+  });
+
   it("allows false-positive recovery resolutions to atomically restore the source issue status", () => {
     expect(
       resolveIssueRecoveryActionSchema.parse({

@@ -2872,6 +2872,7 @@ export function issueRoutes(
       projectId: string | null;
       parentId: string | null;
       status: string;
+      appendPolicy?: string | null;
       assigneeAgentId: string | null;
       assigneeUserId: string | null;
     },
@@ -2896,6 +2897,9 @@ export function issueRoutes(
         return false;
       }
       return assertFreshTaskWatchdogSourceMutation(res, watchdogScope, issue);
+    }
+    if (issue.appendPolicy === "comment_append_open") {
+      return true;
     }
     const boundaryDecision = await decideIssueAccess(req, issue, "issue:comment");
     if (!boundaryDecision.allowed) {
@@ -8909,6 +8913,14 @@ export function issueRoutes(
       !reopenRequested &&
       !resumeRequested &&
       isIssueMentionGrantDecision(commentAccessDecision);
+    const appendPolicyPeerAgentCommentOnly =
+      isClosed &&
+      req.actor.type === "agent" &&
+      issue.assigneeAgentId !== null &&
+      issue.assigneeAgentId !== req.actor.agentId &&
+      !reopenRequested &&
+      !resumeRequested &&
+      issue.appendPolicy === "comment_append_open";
     const effectiveReopenRequested = mentionGrantedPeerAgentCommentOnly ? false : reopenRequested;
     const effectiveResumeRequested = mentionGrantedPeerAgentCommentOnly ? false : resumeRequested;
     if (
@@ -8916,7 +8928,8 @@ export function issueRoutes(
       req.actor.type === "agent" &&
       issue.assigneeAgentId !== null &&
       issue.assigneeAgentId !== req.actor.agentId &&
-      !mentionGrantedPeerAgentCommentOnly
+      !mentionGrantedPeerAgentCommentOnly &&
+      !appendPolicyPeerAgentCommentOnly
     ) {
       if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
     }
