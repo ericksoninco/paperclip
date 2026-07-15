@@ -2898,6 +2898,7 @@ export function issueRoutes(
       }
       return assertFreshTaskWatchdogSourceMutation(res, watchdogScope, issue);
     }
+    // This opt-in policy makes the issue company-wide agent-appendable for shared logs only.
     if (issue.appendPolicy === "comment_append_open") {
       return true;
     }
