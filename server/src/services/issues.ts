@@ -2351,6 +2351,7 @@ const issueListSelect = {
   `,
   status: issues.status,
   workMode: issues.workMode,
+  appendPolicy: issues.appendPolicy,
   priority: issues.priority,
   assigneeAgentId: issues.assigneeAgentId,
   assigneeUserId: issues.assigneeUserId,
